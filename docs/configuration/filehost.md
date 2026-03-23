@@ -12,7 +12,7 @@ Enable or disable all file upload functionality.
 # Default: true
 
 [filehost]
-enabled = true
+enabled = false
 ```
 
 ## `button`
@@ -25,7 +25,7 @@ Show the upload button (<kbd>+</kbd>) in the message input bar.
 # Default: true
 
 [filehost]
-button = true
+button = false
 ```
 
 ## `paste`
@@ -38,7 +38,7 @@ Allow uploading files from the clipboard.
 # Default: true
 
 [filehost]
-paste = true
+paste = false
 ```
 
 ## `file_drop`
@@ -51,5 +51,5 @@ Handle files dropped into the window.
 # Default: true
 
 [filehost]
-file_drop = true
+file_drop = false
 ```
