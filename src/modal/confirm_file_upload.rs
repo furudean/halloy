@@ -16,7 +16,7 @@ pub fn view<'a>(
     let mut spans = vec![
         span("You are about to upload to the filehost "),
         span(url).color(url_color).link(()),
-        span("\nMake sure you trust this domain."),
+        span(" for the first time."),
     ];
 
     if has_credentials {
@@ -33,7 +33,7 @@ pub fn view<'a>(
             .on_link(|()| Message::OpenURL(url.to_string()))
             .align_x(iced::Alignment::Center),
             row![
-                button(text("Upload"))
+                button(text("Really upload"))
                     .padding(5)
                     .style(|theme, status| theme::button::secondary(
                         theme, status, false
@@ -46,7 +46,7 @@ pub fn view<'a>(
                     ))
                     .on_press(Message::Cancel),
             ]
-            .spacing(4),
+            .spacing(8),
         ]
         .align_x(iced::Alignment::Center)
         .spacing(12),
