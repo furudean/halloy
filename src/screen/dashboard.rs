@@ -2028,7 +2028,17 @@ impl Dashboard {
             column![column![base]].into()
         };
 
-        let base = if self.file_being_hovered {
+        let focused_buffer_has_filehost = self
+            .panes
+            .get(self.focus.window, self.focus.pane)
+            .is_some_and(|pane| match &pane.buffer {
+                Buffer::Channel(s) => clients.get_filehost(&s.server).is_some(),
+                Buffer::Query(s) => clients.get_filehost(&s.server).is_some(),
+                Buffer::Server(s) => clients.get_filehost(&s.server).is_some(),
+                _ => false,
+            });
+
+        let base = if self.file_being_hovered && focused_buffer_has_filehost {
             stack![
                 base,
                 container(
