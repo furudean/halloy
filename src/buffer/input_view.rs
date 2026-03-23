@@ -1541,7 +1541,7 @@ impl State {
     fn schedule_anim_tick() -> Task<Message> {
         Task::perform(
             time::sleep(Duration::from_millis(50)),
-            |_| Message::UploadAnimTick,
+            |()| Message::UploadAnimTick,
         )
     }
 

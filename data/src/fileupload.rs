@@ -116,6 +116,5 @@ fn infer_mime_type(path: &Path, bytes: &[u8]) -> &'static str {
         return mime;
     }
     infer::get(bytes)
-        .map(|kind| kind.mime_type())
-        .unwrap_or("application/octet-stream")
+        .map_or("application/octet-stream", |kind| kind.mime_type())
 }

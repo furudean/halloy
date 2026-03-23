@@ -1784,8 +1784,7 @@ impl Text {
                 (word == "~").then_some(""),
             ) {
                 dirs_next::home_dir()
-                    .map(|h| format!("{}/{rest}", h.to_string_lossy()))
-                    .unwrap_or_else(|| word.to_string())
+                    .map_or_else(|| word.to_string(), |h| format!("{}/{rest}", h.to_string_lossy()))
             } else {
                 word.to_string()
             };
@@ -1793,8 +1792,7 @@ impl Text {
         // Split into the directory prefix and the filename prefix being type
         let (dir_prefix, file_prefix) = expanded
             .rfind('/')
-            .map(|pos| (&expanded[..=pos], &expanded[pos + 1..]))
-            .unwrap_or(("", expanded.as_str()));
+            .map_or(("", expanded.as_str()), |pos| (&expanded[..=pos], &expanded[pos + 1..]));
 
         let dir = if dir_prefix.is_empty() {
             Path::new(".")
@@ -1814,7 +1812,7 @@ impl Text {
         self.selected = None;
         self.prompt = word.to_string();
         self.filtered = read_dir
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|e| {
                 e.file_name().to_str().is_some_and(|name| {
                     name.starts_with(file_prefix)

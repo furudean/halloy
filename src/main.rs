@@ -873,8 +873,8 @@ impl Halloy {
                                 Some(Modal::ConfirmFileUpload { .. })
                             );
                             self.modal = None;
-                            if cancel_upload {
-                                if let Screen::Dashboard(_) = &self.screen {
+                            if cancel_upload
+                                && let Screen::Dashboard(_) = &self.screen {
                                     return Task::batch(vec![
                                         command.map(Message::Modal),
                                         Task::done(Message::Dashboard(
@@ -882,7 +882,6 @@ impl Halloy {
                                         )),
                                     ]);
                                 }
-                            }
                         }
                         modal::Event::ConfirmFileUpload => {
                             self.modal = None;
