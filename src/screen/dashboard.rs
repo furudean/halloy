@@ -2038,7 +2038,10 @@ impl Dashboard {
                 _ => false,
             });
 
-        let base = if self.file_being_hovered && focused_buffer_has_filehost {
+        let base = if self.file_being_hovered
+            && focused_buffer_has_filehost
+            && config.filehost.file_drop()
+        {
             stack![
                 base,
                 container(
@@ -4233,6 +4236,7 @@ impl Dashboard {
         id: window::Id,
         event: window::Event,
         theme: &mut Theme,
+        config: &Config,
     ) -> Task<Message> {
         if self.panes.popout.contains_key(&id) {
             match event {
@@ -4248,14 +4252,18 @@ impl Dashboard {
                 | window::Event::Unfocused
                 | window::Event::Opened { .. } => {}
                 window::Event::FileHovered => {
-                    self.file_being_hovered = true;
+                    if config.filehost.file_drop() {
+                        self.file_being_hovered = true;
+                    }
                 }
                 window::Event::FilesHoveredLeft => {
                     self.file_being_hovered = false;
                 }
                 window::Event::FileDropped(path) => {
                     self.file_being_hovered = false;
-                    return self.handle_file_drop(path);
+                    if config.filehost.file_drop() {
+                        return self.handle_file_drop(path);
+                    }
                 }
             }
         } else if self.theme_editor.as_ref().is_some_and(|e| e.window == id) {

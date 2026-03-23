@@ -351,7 +351,7 @@ impl Commands {
                 current_target,
                 supports_detach,
                 isupport,
-                has_filehost,
+                has_filehost && config.filehost.enabled,
             )
         } else {
             disconnected_command_list(server)

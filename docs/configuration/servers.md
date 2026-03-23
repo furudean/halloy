@@ -746,7 +746,7 @@ include = { channels = ["#halloy"] }
 
 ## `filehost`
 
-See the [Filehost guide](/guides/filehost) for usage information.
+See the [Filehost guide](/guides/filehost) for usage information. For global upload options see [File Upload](/configuration/file-upload).
 
 ### `enabled`
 

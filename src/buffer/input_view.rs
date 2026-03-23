@@ -599,7 +599,7 @@ pub fn view<'a>(
             )
         });
 
-    let maybe_upload_button = filehost_url.is_some().then(|| {
+    let maybe_upload_button = (filehost_url.is_some() && config.filehost.button()).then(|| {
         tooltip(
             button(center(crate::icon::plus().size(15)))
                 .padding(4)
@@ -1111,8 +1111,8 @@ impl State {
                 config,
             ),
             Message::Paste => {
-                let has_filehost =
-                    clients.get_filehost(buffer.server()).is_some();
+                let has_filehost = clients.get_filehost(buffer.server()).is_some()
+                    && config.filehost.paste();
 
                 let task = Task::perform(
                     async move {
@@ -2039,6 +2039,9 @@ impl State {
                             Task::none(),
                             Some(Event::Reconnect(buffer.server().clone())),
                         );
+                    }
+                    command::Internal::Upload(_) if !config.filehost.enabled => {
+                        return (Task::none(), None);
                     }
                     command::Internal::Upload(None) => {
                         return (

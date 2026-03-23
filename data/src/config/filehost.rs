@@ -1,0 +1,39 @@
+use serde::Deserialize;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct FileUpload {
+    /// Master switch to disable all file upload functionality. Defaults to `true`.
+    pub enabled: bool,
+    /// Show the upload button in the input bar. Defaults to `true`.
+    pub button: bool,
+    /// Allow uploading files from the clipboard via paste. Defaults to `true`.
+    pub paste: bool,
+    /// Show the drag-and-drop overlay and handle dropped files. Defaults to `true`.
+    pub file_drop: bool,
+}
+
+impl Default for FileUpload {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            button: true,
+            paste: true,
+            file_drop: true,
+        }
+    }
+}
+
+impl FileUpload {
+    pub fn button(&self) -> bool {
+        self.enabled && self.button
+    }
+
+    pub fn paste(&self) -> bool {
+        self.enabled && self.paste
+    }
+
+    pub fn file_drop(&self) -> bool {
+        self.enabled && self.file_drop
+    }
+}

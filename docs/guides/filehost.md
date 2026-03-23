@@ -75,4 +75,5 @@ send_credentials = true
 
 ## Configuration reference
 
-See [Servers — filehost](/configuration/servers#filehost) for the full list of configuration options.
+- [Servers — filehost](/configuration/servers#filehost) — per-server filehost configuration
+- [File Upload](/configuration/file-upload) — global filehost settings
