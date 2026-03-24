@@ -163,9 +163,6 @@ pub fn spinner<'a>(angle: f32) -> Svg<'a, Theme> {
         .width(15)
         .height(15)
         .rotation(iced::Radians(angle))
-        .style(|theme: &Theme, _| iced::widget::svg::Style {
-            color: Some(theme.styles().text.primary.color),
-        })
 }
 
 fn to_text<'a>(unicode: char) -> Text<'a> {
