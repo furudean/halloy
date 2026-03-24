@@ -244,7 +244,7 @@ impl Default for Server {
 #[derive(PartialEq, Eq, Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Filehost {
-    /// Whether to use filehost for file uploads. Defaults to `true`.
+    /// Whether to use the server's filehost. Defaults to `true`.
     pub enabled: bool,
     /// Override the filehost URL advertised by the server via ISUPPORT
     pub override_url: Option<String>,
