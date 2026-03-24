@@ -115,7 +115,7 @@ export default defineConfig({
           },
           {
             text: "File Upload",
-            link: "/configuration/filehost",
+            link: "/configuration/file-upload",
           },
           { text: "Font", link: "/configuration/font" },
           {
