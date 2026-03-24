@@ -3918,7 +3918,7 @@ impl Client {
                 username, password, ..
             } => Some(fileupload::Auth::Basic {
                 username: username.clone(),
-                password: password.clone()?,
+                password: password.clone(),
             }),
             config::server::Sasl::External { .. } => None, // ¯\_(ツ)_/¯
         }

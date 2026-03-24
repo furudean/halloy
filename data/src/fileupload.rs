@@ -19,7 +19,7 @@ pub enum Error {
 }
 
 pub enum Auth {
-    Basic { username: String, password: String },
+    Basic { username: String, password: Option<String> },
 }
 
 /// Upload the file at `path` to `upload_url`.
@@ -72,8 +72,8 @@ pub async fn upload(
         .header(header::CONTENT_LENGTH, bytes.len())
         .body(bytes);
 
-    if let Some(auth) = auth {
-        req = req.header(header::AUTHORIZATION, auth_header_value(auth));
+    if let Some(value) = auth_header_value(auth) {
+        req = req.header(header::AUTHORIZATION, value);
     }
 
     let resp = req.send().await?;
@@ -97,12 +97,13 @@ pub async fn upload(
     Ok(file_url.to_string())
 }
 
-fn auth_header_value(auth: Auth) -> String {
+fn auth_header_value(auth: Option<Auth>) -> Option<String> {
     use base64::Engine as _;
-    let Auth::Basic { username, password } = auth;
+    let Auth::Basic { username, password } = auth?;
+    let password = password?;
     let encoded = base64::engine::general_purpose::STANDARD
         .encode(format!("{username}:{password}"));
-    format!("Basic {encoded}")
+    Some(format!("Basic {encoded}"))
 }
 
 fn infer_mime_type(path: &Path, bytes: &[u8]) -> &'static str {
