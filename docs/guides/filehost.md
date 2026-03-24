@@ -69,9 +69,9 @@ send_credentials = true
 
 ## Limitations
 
-- Drag and drop is not supported on Wayland due to an upstream [iced limitation](https://github.com/iced-rs/iced/issues/2538).
-- Drag and drop only works into the currently active buffer.
-- When connecting through soju, downstream server filehosts are ignored. Soju does not currently support passing through `draft/FILEHOST` (see [soju#374](https://codeberg.org/emersion/soju/issues/374)). You can set [`filehost.override_url`](/configuration/servers#override_url) to work around this.
+- Drag and drop is not supported on Wayland.
+- Drag and drop only works in the active buffer.
+- When connecting through soju, downstream server filehosts are ignored. Soju does not currently support passing through `draft/FILEHOST` ISUPPORT tokens (see [soju#374](https://codeberg.org/emersion/soju/issues/374)). You can set [`filehost.override_url`](/configuration/servers#override_url) to work around this.
 
 ## Configuration reference
 
