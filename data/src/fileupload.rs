@@ -98,8 +98,8 @@ pub async fn upload(
 }
 
 fn auth_header_value(auth: Auth) -> String {
-    let Auth::Basic { username, password } = auth;
     use base64::Engine as _;
+    let Auth::Basic { username, password } = auth;
     let encoded = base64::engine::general_purpose::STANDARD
         .encode(format!("{username}:{password}"));
     format!("Basic {encoded}")
