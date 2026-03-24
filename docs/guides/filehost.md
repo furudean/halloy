@@ -31,7 +31,7 @@ server:
 
 soju supports filehost via its own `soju.im/FILEHOST` token. Configure filehost [in your soju configuration](https://codeberg.org/emersion/soju/src/branch/master/doc/file-upload.md).
 
-soju will advertise the configured URL to clients via `soju.im/FILEHOST`. This is then passed down to your networks via bouncer-networks.
+soju will advertise the configured URL to clients via `soju.im/FILEHOST`. For networks provided by bouncer, Halloy will use the bouncer's filehost.
 
 ::: info
 soju requires you to [authenticate](#Authentication) your upload requests
@@ -47,10 +47,10 @@ If your server does not allow advertising a filehost token, or you do not contro
 
 ## Authentication
 
-Set [`filehost.send_credentials`](/configuration/servers#send_credentials) to `true` and Halloy will attach your server credentials when uploading.
+[`filehost.send_credentials`](/configuration/servers#send_credentials) controls when Halloy attaches your SASL plain credentials to upload requests. The default `"to-bouncer"` automatically sends credentials when connected to a soju bouncer (detected via `soju.im/FILEHOST` and `soju.im/bouncer-networks`). Set it to `"always"` to send credentials to any filehost, or `"never"` to disable.
 
 ::: warning
-Only enable `send_credentials` if you trust the filehost server. Your username and password will be sent with every upload.
+Only use `send_credentials = "always"` if you trust the filehost server. Your username and password will be sent with uploads.
 :::
 
 ```toml
@@ -63,15 +63,16 @@ nickname = "you"
 username = "you"
 password = "hunter2"
 
+# send credentials when uploading
 [servers.<name>.filehost]
-send_credentials = true
+send_credentials = "always"
 ```
 
 ## Limitations
 
 - Drag and drop is not supported on Wayland.
 - Drag and drop only works in the active buffer.
-- When connecting through soju, downstream server filehosts are ignored. Soju does not currently support passing through `draft/FILEHOST` ISUPPORT tokens (see [soju#374](https://codeberg.org/emersion/soju/issues/374)). You can set [`filehost.override_url`](/configuration/servers#override_url) to work around this.
+- When connecting through soju, downstream server filehosts are ignored. Soju does not support passing through `draft/FILEHOST` ISUPPORT tokens (see [soju#374](https://codeberg.org/emersion/soju/issues/374)). You can set [`filehost.override_url`](/configuration/servers#override_url) to work around this.
 
 ## Configuration reference
 

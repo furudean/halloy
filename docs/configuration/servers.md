@@ -763,15 +763,19 @@ enabled = true
 
 ### `send_credentials`
 
-Send an `Authorization` header with uploads using your SASL plain credentials.
+Controls when an `Authorization` header is sent with file uploads using the server's SASL plain credentials.
+
+- `"to-bouncer"` — send credentials only when `soju.im/FILEHOST` and `soju.im/bouncer-networks` are both detected (i.e. the server is a soju bouncer)
+- `"always"` — always send credentials
+- `"never"` — never send credentials
 
 ```toml
-# Type: boolean
-# Values: true, false
-# Default: false
+# Type: string
+# Values: "to-bouncer", "always", "never"
+# Default: "to-bouncer"
 
 [servers.<name>.filehost]
-send_credentials = false
+send_credentials = "always"
 ```
 
 ### `override_url`

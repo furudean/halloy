@@ -276,10 +276,11 @@ impl FromStr for Operation {
                                 Err("value required")
                             }
                         }
-                        "draft/FILEHOST" | "soju.im/FILEHOST" => {
-                            Ok(Operation::Add(Parameter::FILEHOST(
-                                value.to_owned(),
-                            )))
+                        token @ ("draft/FILEHOST" | "soju.im/FILEHOST") => {
+                            Ok(Operation::Add(Parameter::FILEHOST {
+                                url: value.to_owned(),
+                                token: token.to_owned(),
+                            }))
                         }
                         "ESILENCE" => Ok(Operation::Add(Parameter::ESILENCE(
                             parse_optional_letters(value)?,
@@ -698,7 +699,7 @@ pub enum Parameter {
     EXCEPTS(char),
     EXTBAN(Option<char>, String),
     FNC,
-    FILEHOST(String),
+    FILEHOST { url: String, token: String },
     HOSTLEN(u16),
     INVEX(char),
     KEYLEN(u16),
@@ -751,7 +752,7 @@ impl Parameter {
             Parameter::CNOTICE => Some(Kind::CNOTICE),
             Parameter::CPRIVMSG => Some(Kind::CPRIVMSG),
             Parameter::ELIST(_) => Some(Kind::ELIST),
-            Parameter::FILEHOST(_) => Some(Kind::FILEHOST),
+            Parameter::FILEHOST { .. } => Some(Kind::FILEHOST),
             Parameter::HOSTLEN(_) => Some(Kind::HOSTLEN),
             Parameter::KEYLEN(_) => Some(Kind::KEYLEN),
             Parameter::KICKLEN(_) => Some(Kind::KICKLEN),
@@ -1323,11 +1324,19 @@ pub fn get_statusmsg_or_default(
 }
 
 pub fn get_filehost(isupport: &HashMap<Kind, Parameter>) -> Option<&str> {
-    if let Some(Parameter::FILEHOST(url)) = isupport.get(&Kind::FILEHOST) {
+    if let Some(Parameter::FILEHOST { url, .. }) = isupport.get(&Kind::FILEHOST)
+    {
         Some(url.as_str())
     } else {
         None
     }
+}
+
+pub fn is_soju_filehost(isupport: &HashMap<Kind, Parameter>) -> bool {
+    matches!(
+        isupport.get(&Kind::FILEHOST),
+        Some(Parameter::FILEHOST { token, .. }) if token == "soju.im/FILEHOST"
+    )
 }
 
 pub fn is_client_only_tag_denied(

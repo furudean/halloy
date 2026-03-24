@@ -1045,9 +1045,7 @@ impl Client {
                 }
 
                 let network = BouncerNetwork::parse(netid, network)?;
-                let mut network_config = self.config.bouncer_config();
-                network_config.bouncer_filehost_url =
-                    self.filehost().map(String::from);
+                let network_config = self.config.bouncer_config();
                 return Ok(vec![Event::BouncerNetwork(
                     Server {
                         network: Some(network.into()),
@@ -3885,47 +3883,6 @@ impl Client {
         self.isupport.contains_key(&isupport::Kind::SAFELIST)
     }
 
-    pub fn filehost(&self) -> Option<&str> {
-        let isupport_url = isupport::get_filehost(&self.isupport);
-        match &self.config.filehost {
-            None => isupport_url,
-            Some(filehost) if !filehost.enabled => None,
-            Some(filehost) if self.server.is_bouncer_network() => {
-                // prefer network's own filehost over bouncer
-                isupport_url.or(filehost.override_url.as_deref())
-            }
-            Some(filehost) => filehost.override_url.as_deref().or(isupport_url),
-        }
-    }
-
-    pub fn filehost_auth(&self) -> Option<fileupload::Auth> {
-        let filehost = self.config.filehost.as_ref()?;
-
-        if !filehost.send_credentials {
-            return None;
-        }
-
-        if self.server.is_bouncer_network() {
-            // only send credentials if the network's filehost URL matches bouncer
-            // — otherwise the URL has changed, so we should reset the settings
-            let child_url = self.filehost();
-            let bouncer_url = self.config.bouncer_filehost_url.as_deref();
-            if child_url != bouncer_url {
-                return None;
-            }
-        }
-
-        match self.config.sasl.as_ref()? {
-            config::server::Sasl::Plain {
-                username, password, ..
-            } => Some(fileupload::Auth::Basic {
-                username: username.clone(),
-                password: password.clone(),
-            }),
-            config::server::Sasl::External { .. } => None, // ¯\_(ツ)_/¯
-        }
-    }
-
     fn supports_typing(&self) -> bool {
         self.capabilities.acknowledged(Capability::MessageTags)
     }
@@ -4380,14 +4337,82 @@ impl Map {
     }
 
     pub fn get_filehost<'a>(&'a self, server: &Server) -> Option<&'a str> {
-        self.client(server).and_then(Client::filehost)
+        let client = self.client(server)?;
+
+        if server.is_bouncer_network() {
+            match &client.config.filehost {
+                Some(f) if !f.enabled => return None,
+                Some(f) if f.override_url.is_some() => {
+                    return f.override_url.as_deref();
+                }
+                _ => {
+                    return server
+                        .parent()
+                        .as_ref()
+                        .and_then(|p| self.get_filehost(p));
+                }
+            }
+        }
+
+        let isupport_url = isupport::get_filehost(&client.isupport);
+        match &client.config.filehost {
+            None => isupport_url,
+            Some(f) if !f.enabled => None,
+            Some(f) => f.override_url.as_deref().or(isupport_url),
+        }
     }
 
     pub fn get_filehost_auth(
         &self,
         server: &Server,
     ) -> Option<fileupload::Auth> {
-        self.client(server).and_then(Client::filehost_auth)
+        if server.is_bouncer_network() {
+            let client = self.client(server)?;
+            let has_override = client
+                .config
+                .filehost
+                .as_ref()
+                .filter(|f| f.enabled)
+                .and_then(|f| f.override_url.as_ref())
+                .is_some();
+
+            if !has_override {
+                return server
+                    .parent()
+                    .as_ref()
+                    .and_then(|p| self.get_filehost_auth(p));
+            }
+        }
+
+        let client = self.client(server)?;
+        let default_filehost = config::server::Filehost::default();
+        let filehost =
+            client.config.filehost.as_ref().unwrap_or(&default_filehost);
+
+        let send = match filehost.send_credentials {
+            config::server::SendCredentials::Never => return None,
+            config::server::SendCredentials::Always => true,
+            config::server::SendCredentials::ToBouncer => {
+                isupport::is_soju_filehost(&client.isupport)
+                    && client
+                        .capabilities
+                        .acknowledged(Capability::BouncerNetworks)
+            }
+        };
+
+        if !send {
+            return None;
+        }
+
+        match client.config.sasl.as_ref()? {
+            config::server::Sasl::Plain {
+                username, password, ..
+            } => Some(fileupload::Auth::Basic {
+                username: username.clone(),
+                password: password.clone(),
+            }),
+            config::server::Sasl::External { .. } => None,
+        }
     }
 
     pub fn get_use_tls(&self, server: &Server) -> bool {

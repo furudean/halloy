@@ -115,10 +115,6 @@ pub struct Server {
     pub confirm_message_delivery: ConfirmMessageDelivery,
     pub autoconnect: bool,
     pub filehost: Option<Filehost>,
-    /// The bouncer's resolved filehost URL, omly set when this config is derived
-    /// for a bouncer network.
-    #[serde(skip)]
-    pub bouncer_filehost_url: Option<String>,
 }
 
 impl Server {
@@ -236,7 +232,6 @@ impl Default for Server {
             confirm_message_delivery: ConfirmMessageDelivery::default(),
             autoconnect: true,
             filehost: None,
-            bouncer_filehost_url: None,
         }
     }
 }
@@ -248,9 +243,9 @@ pub struct Filehost {
     pub enabled: bool,
     /// Override the filehost URL advertised by the server via ISUPPORT
     pub override_url: Option<String>,
-    /// Send an `Authorization` header with requests that match the buffer username:password.
-    /// Defaults to `false`.
-    pub send_credentials: bool,
+    /// Send an `Authorization` header with file upload requests.
+    /// Defaults to `"to-bouncer"`.
+    pub send_credentials: SendCredentials,
 }
 
 impl Default for Filehost {
@@ -258,9 +253,21 @@ impl Default for Filehost {
         Self {
             enabled: true,
             override_url: None,
-            send_credentials: false,
+            send_credentials: SendCredentials::default(),
         }
     }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SendCredentials {
+    /// Send credentials only when `soju.im/FILEHOST` and `soju.im/bouncer-networks` are both detected.
+    #[default]
+    ToBouncer,
+    /// Always send credentials with file uploads.
+    Always,
+    /// Never send credentials with file uploads.
+    Never,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Deserialize)]
