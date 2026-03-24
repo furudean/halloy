@@ -578,13 +578,22 @@ pub fn view<'a>(
                 crate::icon::cancel().size(15).style(theme::text::error).into()
             } else {
                 let t = state.upload_anim * std::f32::consts::TAU;
-                crate::icon::spinner(t + 0.4 * t.sin()).into()
+                let spinner = crate::icon::spinner(t + 0.4 * t.sin());
+                if state.uploading > 1 {
+                    row![spinner, text(state.uploading).size(12)]
+                        .align_y(iced::Alignment::Center)
+                        .spacing(2)
+                        .into()
+                } else {
+                    spinner.into()
+                }
             };
+            let width = if state.uploading > 1 { 28 } else { 23 };
             tooltip(
                 mouse_area(
                     button(center(icon))
                         .padding(4)
-                        .width(23)
+                        .width(width)
                         .height(23)
                         .style(|theme, status| {
                             let mut style = theme::button::secondary(theme, status, false);
