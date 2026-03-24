@@ -18,7 +18,7 @@ pub use self::buffer::Buffer;
 pub use self::context_menu::ContextMenu;
 pub use self::ctcp::Ctcp;
 pub use self::file_transfer::FileTransfer;
-pub use self::filehost::FileUpload;
+pub use self::filehost::FileHost;
 pub use self::highlights::Highlights;
 pub use self::keys::Keyboard;
 pub use self::logs::Logs;
@@ -75,7 +75,7 @@ pub struct Config {
     pub keyboard: Keyboard,
     pub notifications: Notifications,
     pub file_transfer: FileTransfer,
-    pub filehost: FileUpload,
+    pub filehost: FileHost,
     pub tooltips: bool,
     pub window: Window,
     pub preview: Preview,
@@ -102,7 +102,7 @@ impl Default for Config {
             keyboard: Keyboard::default(),
             notifications: Notifications::default(),
             file_transfer: FileTransfer::default(),
-            filehost: FileUpload::default(),
+            filehost: FileHost::default(),
             tooltips: true,
             window: Window::default(),
             preview: Preview::default(),
@@ -362,7 +362,7 @@ impl Config {
             pub keyboard: Keyboard,
             pub notifications: Notifications,
             pub file_transfer: FileTransfer,
-            pub filehost: FileUpload,
+            pub filehost: FileHost,
             pub tooltips: bool,
             pub window: Window,
             pub preview: Preview,
@@ -389,7 +389,7 @@ impl Config {
                     keyboard: Keyboard::default(),
                     notifications: Notifications::default(),
                     file_transfer: FileTransfer::default(),
-                    filehost: FileUpload::default(),
+                    filehost: FileHost::default(),
                     tooltips: true,
                     window: Window::default(),
                     preview: Preview::default(),
