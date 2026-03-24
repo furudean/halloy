@@ -20,7 +20,6 @@ pub enum Error {
 
 pub enum Auth {
     Basic { username: String, password: String },
-    Bearer(String),
 }
 
 /// Upload the file at `path` to `upload_url`.
@@ -61,7 +60,7 @@ pub async fn upload(
     let bytes = tokio::fs::read(path).await?;
     let content_type = infer_mime_type(path, &bytes);
 
-    log::debug!("uploading file to {base}");
+    log::debug!("uploading {file_name} to {base}");
 
     let mut req = client
         .post(base.clone())
@@ -99,15 +98,11 @@ pub async fn upload(
 }
 
 fn auth_header_value(auth: Auth) -> String {
-    match auth {
-        Auth::Basic { username, password } => {
-            use base64::Engine as _;
-            let encoded = base64::engine::general_purpose::STANDARD
-                .encode(format!("{username}:{password}"));
-            format!("Basic {encoded}")
-        }
-        Auth::Bearer(token) => format!("Bearer {token}"),
-    }
+    let Auth::Basic { username, password } = auth;
+    use base64::Engine as _;
+    let encoded = base64::engine::general_purpose::STANDARD
+        .encode(format!("{username}:{password}"));
+    format!("Basic {encoded}")
 }
 
 fn infer_mime_type(path: &Path, bytes: &[u8]) -> &'static str {
