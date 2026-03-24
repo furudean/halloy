@@ -50,7 +50,8 @@ impl KnownFilehosts {
 
     pub async fn save(&self) -> Result<(), Error> {
         let path = path()?;
-        let mut urls: Vec<&str> = self.urls.iter().map(String::as_str).collect();
+        let mut urls: Vec<&str> =
+            self.urls.iter().map(String::as_str).collect();
         urls.sort();
         tokio::fs::write(path, urls.join("\n")).await?;
         Ok(())

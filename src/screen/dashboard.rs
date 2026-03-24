@@ -17,8 +17,8 @@ use data::rate_limit::TokenPriority;
 use data::target::{self, Target};
 use data::{
     Config, Notification, Server, User, Version, client, command, config,
-    environment, file_transfer, history, preview, reaction, server, stream,
-    fileupload,
+    environment, file_transfer, fileupload, history, preview, reaction, server,
+    stream,
 };
 use iced::widget::pane_grid::{self, PaneGrid};
 use iced::widget::{Space, center, column, container, row, stack, text};
@@ -1752,9 +1752,13 @@ impl Dashboard {
                 );
                 // Decrement the uploading counter in the input_view.
                 let decrement_msg = match &target {
-                    data::target::Target::Channel(_) => buffer::Message::Channel(
-                        buffer::channel::Message::FileHostUrlReady(String::new()),
-                    ),
+                    data::target::Target::Channel(_) => {
+                        buffer::Message::Channel(
+                            buffer::channel::Message::FileHostUrlReady(
+                                String::new(),
+                            ),
+                        )
+                    }
                     data::target::Target::Query(_) => buffer::Message::Query(
                         buffer::query::Message::FileHostUrlReady(String::new()),
                     ),
@@ -4222,10 +4226,7 @@ impl Dashboard {
         };
 
         if let Some(msg) = msg {
-            Task::done(Message::Pane(
-                window,
-                pane::Message::Buffer(pane, msg),
-            ))
+            Task::done(Message::Pane(window, pane::Message::Buffer(pane, msg)))
         } else {
             Task::none()
         }

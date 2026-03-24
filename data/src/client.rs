@@ -34,7 +34,8 @@ use crate::time::Posix;
 use crate::user::{ChannelUsers, Nick, NickRef};
 use crate::{
     Server, User, buffer, channel_discovery, compression, config, ctcp, dcc,
-    environment, file_transfer, history, isupport, message, mode, server, fileupload,
+    environment, file_transfer, fileupload, history, isupport, message, mode,
+    server,
 };
 
 pub mod on_connect;
@@ -1045,7 +1046,8 @@ impl Client {
 
                 let network = BouncerNetwork::parse(netid, network)?;
                 let mut network_config = self.config.bouncer_config();
-                network_config.bouncer_filehost_url = self.filehost().map(String::from);
+                network_config.bouncer_filehost_url =
+                    self.filehost().map(String::from);
                 return Ok(vec![Event::BouncerNetwork(
                     Server {
                         network: Some(network.into()),
@@ -4381,7 +4383,10 @@ impl Map {
         self.client(server).and_then(Client::filehost)
     }
 
-    pub fn get_filehost_auth(&self, server: &Server) -> Option<fileupload::Auth> {
+    pub fn get_filehost_auth(
+        &self,
+        server: &Server,
+    ) -> Option<fileupload::Auth> {
         self.client(server).and_then(Client::filehost_auth)
     }
 

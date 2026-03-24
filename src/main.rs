@@ -874,14 +874,15 @@ impl Halloy {
                             );
                             self.modal = None;
                             if cancel_upload
-                                && let Screen::Dashboard(_) = &self.screen {
-                                    return Task::batch(vec![
+                                && let Screen::Dashboard(_) = &self.screen
+                            {
+                                return Task::batch(vec![
                                         command.map(Message::Modal),
                                         Task::done(Message::Dashboard(
                                             dashboard::Message::CancelFileHostUpload,
                                         )),
                                     ]);
-                                }
+                            }
                         }
                         modal::Event::ConfirmFileUpload => {
                             self.modal = None;
@@ -1055,7 +1056,12 @@ impl Halloy {
                     Task::batch(tasks)
                 } else if let Screen::Dashboard(dashboard) = &mut self.screen {
                     dashboard
-                        .handle_window_event(id, event, &mut self.theme, &self.config)
+                        .handle_window_event(
+                            id,
+                            event,
+                            &mut self.theme,
+                            &self.config,
+                        )
                         .map(Message::Dashboard)
                 } else {
                     Task::none()

@@ -19,7 +19,10 @@ pub enum Error {
 }
 
 pub enum Auth {
-    Basic { username: String, password: Option<String> },
+    Basic {
+        username: String,
+        password: Option<String>,
+    },
 }
 
 /// Upload the file at `path` to `upload_url`.
@@ -37,8 +40,8 @@ pub async fn upload(
     irc_uses_tls: bool,
     client: Arc<Client>,
 ) -> Result<String, Error> {
-    let base = Url::parse(upload_url)
-        .map_err(|e| Error::InvalidUri(e.to_string()))?;
+    let base =
+        Url::parse(upload_url).map_err(|e| Error::InvalidUri(e.to_string()))?;
 
     // Spec: clients MUST ignore tokens with an URI scheme they don't support.
     if base.scheme() != "http" && base.scheme() != "https" {
@@ -53,9 +56,10 @@ pub async fn upload(
         return Err(Error::InsecureTransport);
     }
 
-    let file_name = path
-        .file_name()
-        .map_or_else(|| String::from("file"), |n| n.to_string_lossy().into_owned());
+    let file_name = path.file_name().map_or_else(
+        || String::from("file"),
+        |n| n.to_string_lossy().into_owned(),
+    );
 
     let bytes = tokio::fs::read(path).await?;
     let content_type = infer_mime_type(path, &bytes);

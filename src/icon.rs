@@ -157,8 +157,7 @@ pub fn not_sent<'a>() -> Svg<'a, Theme> {
 }
 
 pub fn spinner<'a>(angle: f32) -> Svg<'a, Theme> {
-    let bytes =
-        include_bytes!("../assets/spinner.svg").to_vec();
+    let bytes = include_bytes!("../assets/spinner.svg").to_vec();
 
     svg(svg::Handle::from_memory(bytes))
         .width(15)

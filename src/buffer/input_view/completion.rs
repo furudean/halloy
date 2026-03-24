@@ -217,8 +217,15 @@ impl Completion {
         let emojis_view = self.emojis.view(config, on_select_command);
         let paths_view = self.text.path_view(on_select_command);
 
-        if command_view.is_some() || emojis_view.is_some() || paths_view.is_some() {
-            Some(column![emojis_view, paths_view, command_view].spacing(4).into())
+        if command_view.is_some()
+            || emojis_view.is_some()
+            || paths_view.is_some()
+        {
+            Some(
+                column![emojis_view, paths_view, command_view]
+                    .spacing(4)
+                    .into(),
+            )
         } else {
             None
         }
@@ -1779,20 +1786,22 @@ impl Text {
         };
 
         // Expand leading ~ to user's home directory
-        let expanded =
-            if let Some(rest) = word.strip_prefix("~/").or(
-                (word == "~").then_some(""),
-            ) {
-                dirs_next::home_dir()
-                    .map_or_else(|| word.to_string(), |h| format!("{}/{rest}", h.to_string_lossy()))
-            } else {
-                word.to_string()
-            };
+        let expanded = if let Some(rest) =
+            word.strip_prefix("~/").or((word == "~").then_some(""))
+        {
+            dirs_next::home_dir().map_or_else(
+                || word.to_string(),
+                |h| format!("{}/{rest}", h.to_string_lossy()),
+            )
+        } else {
+            word.to_string()
+        };
 
         // Split into the directory prefix and the filename prefix being type
-        let (dir_prefix, file_prefix) = expanded
-            .rfind('/')
-            .map_or(("", expanded.as_str()), |pos| (&expanded[..=pos], &expanded[pos + 1..]));
+        let (dir_prefix, file_prefix) =
+            expanded.rfind('/').map_or(("", expanded.as_str()), |pos| {
+                (&expanded[..=pos], &expanded[pos + 1..])
+            });
 
         let dir = if dir_prefix.is_empty() {
             Path::new(".")
@@ -1821,8 +1830,11 @@ impl Text {
             })
             .map(|e| {
                 let name = e.file_name().to_string_lossy().into_owned();
-                let trailing =
-                    if e.file_type().is_ok_and(|t| t.is_dir()) { "/" } else { "" };
+                let trailing = if e.file_type().is_ok_and(|t| t.is_dir()) {
+                    "/"
+                } else {
+                    ""
+                };
                 format!("{dir_prefix}{name}{trailing}")
             })
             .sorted()

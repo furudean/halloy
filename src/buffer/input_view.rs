@@ -302,7 +302,9 @@ fn platform_specific_key_bindings(
             Some(text_editor::Binding::Custom(Message::Paste))
         }
         // ctrl+v routes to Message::Paste normally, which means we lose our control flow. overwrite it with our own handler
-        iced::keyboard::Key::Character("v") if key_press.modifiers.control() => {
+        iced::keyboard::Key::Character("v")
+            if key_press.modifiers.control() =>
+        {
             Some(text_editor::Binding::Custom(Message::Paste))
         }
 
@@ -574,20 +576,24 @@ pub fn view<'a>(
 
     let maybe_upload_spinner: Option<crate::widget::Element<'a, Message>> =
         (filehost_url.is_some() && state.uploading > 0).then(|| {
-            let icon: crate::widget::Element<'a, Message> = if state.spinner_hovered {
-                crate::icon::cancel().size(15).style(theme::text::error).into()
-            } else {
-                let t = state.upload_anim * std::f32::consts::TAU;
-                let spinner = crate::icon::spinner(t + 0.4 * t.sin());
-                if state.uploading > 1 {
-                    row![spinner, text(state.uploading).size(12)]
-                        .align_y(iced::Alignment::Center)
-                        .spacing(2)
+            let icon: crate::widget::Element<'a, Message> =
+                if state.spinner_hovered {
+                    crate::icon::cancel()
+                        .size(15)
+                        .style(theme::text::error)
                         .into()
                 } else {
-                    spinner.into()
-                }
-            };
+                    let t = state.upload_anim * std::f32::consts::TAU;
+                    let spinner = crate::icon::spinner(t + 0.4 * t.sin());
+                    if state.uploading > 1 {
+                        row![spinner, text(state.uploading).size(12)]
+                            .align_y(iced::Alignment::Center)
+                            .spacing(2)
+                            .into()
+                    } else {
+                        spinner.into()
+                    }
+                };
             let width = if state.uploading > 1 { 28 } else { 23 };
             tooltip(
                 mouse_area(
@@ -596,7 +602,8 @@ pub fn view<'a>(
                         .width(width)
                         .height(23)
                         .style(|theme, status| {
-                            let mut style = theme::button::secondary(theme, status, false);
+                            let mut style =
+                                theme::button::secondary(theme, status, false);
                             if status != iced::widget::button::Status::Hovered {
                                 style.background = None;
                             }
@@ -612,19 +619,22 @@ pub fn view<'a>(
             )
         });
 
-    let maybe_upload_button = (filehost_url.is_some() && config.filehost.button()).then(|| {
-        tooltip(
-            button(center(crate::icon::plus().size(15)))
-                .padding(4)
-                .width(23)
-                .height(23)
-                .style(|theme, status| theme::button::secondary(theme, status, false))
-                .on_press(Message::UploadFile),
-            Some("Upload file"),
-            tooltip::Position::Top,
-            theme,
-        )
-    });
+    let maybe_upload_button =
+        (filehost_url.is_some() && config.filehost.button()).then(|| {
+            tooltip(
+                button(center(crate::icon::plus().size(15)))
+                    .padding(4)
+                    .width(23)
+                    .height(23)
+                    .style(|theme, status| {
+                        theme::button::secondary(theme, status, false)
+                    })
+                    .on_press(Message::UploadFile),
+                Some("Upload file"),
+                tooltip::Position::Top,
+                theme,
+            )
+        });
 
     let content = column![
         container(
@@ -1124,15 +1134,12 @@ impl State {
                 config,
             ),
             Message::Paste => {
-                let has_filehost = clients.get_filehost(buffer.server()).is_some()
-                    && config.filehost.paste();
+                let has_filehost =
+                    clients.get_filehost(buffer.server()).is_some()
+                        && config.filehost.paste();
 
                 let task = Task::perform(
-                    async move {
-                        has_filehost
-                            .then(try_clipboard_upload)
-                            .flatten()
-                    },
+                    async move { has_filehost.then(try_clipboard_upload).flatten() },
                     |path| match path {
                         Some(p) => Message::FilesSelected(vec![p]),
                         None => Message::PasteText,
@@ -1213,12 +1220,13 @@ impl State {
 
                 self.upload_abort_handles.extend(handles);
 
-                let event = buffer.target().map(|target| Event::FileHostUpload {
-                    server: buffer.server().clone(),
-                    target,
-                    file_paths,
-                    abort_registrations: registrations,
-                });
+                let event =
+                    buffer.target().map(|target| Event::FileHostUpload {
+                        server: buffer.server().clone(),
+                        target,
+                        file_paths,
+                        abort_registrations: registrations,
+                    });
                 let anim = was_idle
                     .then(Self::schedule_anim_tick)
                     .unwrap_or_else(Task::none);
@@ -1246,7 +1254,9 @@ impl State {
                 self.spinner_hovered = hovered;
                 (Task::none(), None)
             }
-            Message::FileHostUrlReady(url) if !url.is_empty() && self.uploading > 0 => {
+            Message::FileHostUrlReady(url)
+                if !url.is_empty() && self.uploading > 0 =>
+            {
                 self.uploading = self.uploading.saturating_sub(1);
                 // Append the URL to the end of whatever the user has typed.
                 self.input_content.perform(text_editor::Action::Move(
@@ -1552,10 +1562,9 @@ impl State {
     }
 
     fn schedule_anim_tick() -> Task<Message> {
-        Task::perform(
-            time::sleep(Duration::from_millis(50)),
-            |()| Message::UploadAnimTick,
-        )
+        Task::perform(time::sleep(Duration::from_millis(50)), |()| {
+            Message::UploadAnimTick
+        })
     }
 
     fn close_context_menu(
@@ -2053,7 +2062,9 @@ impl State {
                             Some(Event::Reconnect(buffer.server().clone())),
                         );
                     }
-                    command::Internal::Upload(_) if !config.filehost.enabled => {
+                    command::Internal::Upload(_)
+                        if !config.filehost.enabled =>
+                    {
                         return (Task::none(), None);
                     }
                     command::Internal::Upload(None) => {
@@ -2088,17 +2099,14 @@ impl State {
                         let anim = was_idle
                             .then(Self::schedule_anim_tick)
                             .unwrap_or_else(Task::none);
-                        let event =
-                            buffer.target().map(|target| {
-                                Event::FileHostUpload {
-                                    server: buffer.server().clone(),
-                                    target,
-                                    file_paths: vec![file_path],
-                                    abort_registrations: vec![
-                                        registration,
-                                    ],
-                                }
-                            });
+                        let event = buffer.target().map(|target| {
+                            Event::FileHostUpload {
+                                server: buffer.server().clone(),
+                                target,
+                                file_paths: vec![file_path],
+                                abort_registrations: vec![registration],
+                            }
+                        });
                         return (anim, event);
                     }
                     command::Internal::Exec(command) => {
@@ -2679,7 +2687,7 @@ fn try_clipboard_upload() -> Option<std::path::PathBuf> {
 #[cfg(target_os = "macos")]
 fn macos_clipboard_file() -> Option<std::path::PathBuf> {
     use objc2_app_kit::NSPasteboard;
-    use objc2_foundation::{NSURL, NSString};
+    use objc2_foundation::{NSString, NSURL};
 
     let url_str = {
         let pasteboard = NSPasteboard::generalPasteboard();

@@ -1,5 +1,5 @@
-use iced::widget::{button, column, container, row, span, text};
 use iced::Length;
+use iced::widget::{button, column, container, row, span, text};
 
 use super::Message;
 use crate::widget::{Element, selectable_rich_text};
@@ -26,12 +26,11 @@ pub fn view<'a>(
         );
     }
 
-
     container(
         column![
             selectable_rich_text::<Message, (), (), _, _>(spans)
-            .on_link(|()| Message::OpenURL(url.to_string()))
-            .align_x(iced::Alignment::Center),
+                .on_link(|()| Message::OpenURL(url.to_string()))
+                .align_x(iced::Alignment::Center),
             row![
                 button(text("Really upload"))
                     .padding(5)
