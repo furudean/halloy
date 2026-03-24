@@ -1137,9 +1137,9 @@ impl State {
                 config,
             ),
             Message::Paste => {
-                let has_filehost =
-                    clients.get_filehost(buffer.server()).is_some()
-                        && config.filehost.paste();
+                let has_filehost = buffer.target().is_some()
+                    && clients.get_filehost(buffer.server()).is_some()
+                    && config.filehost.paste();
 
                 let task = Task::perform(
                     async move { has_filehost.then(try_clipboard_upload).flatten() },
@@ -1430,8 +1430,10 @@ impl State {
                                 .get_server_supports_detach(buffer.server());
                             let isupport =
                                 clients.get_isupport(buffer.server());
-                            let has_filehost =
-                                clients.get_filehost(buffer.server()).is_some();
+                            let has_filehost = buffer.target().is_some()
+                                && clients
+                                    .get_filehost(buffer.server())
+                                    .is_some();
 
                             self.completion.process(
                                 &line,
@@ -2287,7 +2289,8 @@ impl State {
             let supports_detach =
                 clients.get_server_supports_detach(buffer.server());
             let isupport = clients.get_isupport(buffer.server());
-            let has_filehost = clients.get_filehost(buffer.server()).is_some();
+            let has_filehost = buffer.target().is_some()
+                && clients.get_filehost(buffer.server()).is_some();
 
             self.completion.process(
                 &line,

@@ -2035,11 +2035,12 @@ impl Dashboard {
         let focused_buffer_has_filehost = self
             .panes
             .get(self.focus.window, self.focus.pane)
-            .is_some_and(|pane| match &pane.buffer {
-                Buffer::Channel(s) => clients.get_filehost(&s.server).is_some(),
-                Buffer::Query(s) => clients.get_filehost(&s.server).is_some(),
-                Buffer::Server(s) => clients.get_filehost(&s.server).is_some(),
-                _ => false,
+            .is_some_and(|pane| {
+                pane.buffer.target().is_some()
+                    && pane
+                        .buffer
+                        .server()
+                        .is_some_and(|s| clients.get_filehost(&s).is_some())
             });
 
         let base = if self.file_being_hovered

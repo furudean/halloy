@@ -187,8 +187,6 @@ pub fn view<'a>(
         data::config::buffer::text_input::Visibility::Always => true,
     };
 
-    let filehost_url = clients.get_filehost(&state.server);
-
     let text_input = show_text_input.then(|| {
         column![
             space::vertical().height(4),
@@ -198,7 +196,7 @@ pub fn view<'a>(
                 &state.server,
                 config,
                 theme,
-                filehost_url,
+                None,
             )
             .map(Message::InputView)
         ]
