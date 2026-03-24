@@ -1274,6 +1274,10 @@ impl State {
                 self.input_content.perform(text_editor::Action::Edit(
                     text_editor::Edit::Paste(std::sync::Arc::new(url)),
                 ));
+                history.record_draft(RawInput {
+                    buffer: buffer.clone(),
+                    text: self.input_content.text(),
+                });
                 (self.focus(), None)
             }
             Message::FileHostUrlReady(_) => {
