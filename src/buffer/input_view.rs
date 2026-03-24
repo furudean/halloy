@@ -587,7 +587,11 @@ pub fn view<'a>(
                         .width(23)
                         .height(23)
                         .style(|theme, status| {
-                            theme::button::secondary(theme, status, false)
+                            let mut style = theme::button::secondary(theme, status, false);
+                            if status != iced::widget::button::Status::Hovered {
+                                style.background = None;
+                            }
+                            style
                         })
                         .on_press(Message::CancelUploads),
                 )
