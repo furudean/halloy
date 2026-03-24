@@ -56,7 +56,7 @@ pub async fn upload(
 
     let file_name = path
         .file_name()
-        .map_or_else(|| String::from("upload"), |n| n.to_string_lossy().into_owned());
+        .map_or_else(|| String::from("file"), |n| n.to_string_lossy().into_owned());
 
     let bytes = tokio::fs::read(path).await?;
     let content_type = infer_mime_type(path, &bytes);
