@@ -277,7 +277,9 @@ impl FromStr for Operation {
                             }
                         }
                         "draft/FILEHOST" | "soju.im/FILEHOST" => {
-                            Ok(Operation::Add(Parameter::FILEHOST(value.to_owned())))
+                            Ok(Operation::Add(Parameter::FILEHOST(
+                                value.to_owned(),
+                            )))
                         }
                         "ESILENCE" => Ok(Operation::Add(Parameter::ESILENCE(
                             parse_optional_letters(value)?,
