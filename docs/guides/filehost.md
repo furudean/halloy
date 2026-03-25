@@ -47,7 +47,7 @@ If your server does not allow advertising a filehost token, or you do not contro
 
 ## Authentication
 
-[`filehost.send_credentials`](/configuration/servers#send_credentials) controls when Halloy attaches your SASL plain credentials to upload requests. The default `"to-bouncer"` automatically sends credentials when connected to a soju bouncer (detected via `soju.im/FILEHOST` and `soju.im/bouncer-networks`). Set it to `"always"` to send credentials to any filehost, or `"never"` to disable.
+[`filehost.send_credentials`](/configuration/servers#send_credentials) controls when Halloy attaches your SASL plain credentials to upload requests. The default `"to-bouncer"` automatically sends credentials when a filehost is advertised alongside the `soju.im/bouncer-networks` capability. Set it to `"always"` to send credentials to any filehost, or `"never"` to disable.
 
 ::: warning
 Only use `send_credentials = "always"` if you trust the filehost server. Your username and password will be sent with uploads.
@@ -72,7 +72,7 @@ send_credentials = "always"
 
 - Drag and drop is not supported on Wayland.
 - Drag and drop only works in the active buffer.
-- When connecting through soju, downstream server filehosts are ignored. Soju does not support passing through `draft/FILEHOST` ISUPPORT tokens (see [soju#374](https://codeberg.org/emersion/soju/issues/374)). You can set [`filehost.override_url`](/configuration/servers#override_url) to work around this.
+- When connecting through soju, downstream server filehosts are not passed through to child networks. Soju does not support forwarding `FILEHOST` ISUPPORT tokens from downstream servers (see [soju#374](https://codeberg.org/emersion/soju/issues/374)). You can set [`filehost.override_url`](/configuration/servers#override_url) to work around this.
 
 ## Configuration reference
 

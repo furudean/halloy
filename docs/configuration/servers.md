@@ -765,7 +765,7 @@ enabled = true
 
 Controls when an `Authorization` header is sent with file uploads using the server's SASL plain credentials.
 
-- `"to-bouncer"` — send credentials only when `soju.im/FILEHOST` and `soju.im/bouncer-networks` are both detected (i.e. the server is a soju bouncer)
+- `"to-bouncer"` — send credentials only when a filehost is advertised alongside the `soju.im/bouncer-networks` capability
 - `"always"` — always send credentials
 - `"never"` — never send credentials
 

@@ -4393,7 +4393,7 @@ impl Map {
             config::server::SendCredentials::Never => return None,
             config::server::SendCredentials::Always => true,
             config::server::SendCredentials::ToBouncer => {
-                isupport::is_soju_filehost(&client.isupport)
+                isupport::get_filehost(&client.isupport).is_some()
                     && client
                         .capabilities
                         .acknowledged(Capability::BouncerNetworks)
