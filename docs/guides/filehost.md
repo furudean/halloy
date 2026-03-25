@@ -43,7 +43,7 @@ soju requires you to [authenticate](#Authentication) your upload requests
 
 ### Others
 
-If your server does not allow advertising a filehost token, or you do not control your server, you can configure a URL manually via [`filehost.override_url`](/configuration/servers#override_url).
+If your server does not allow advertising a filehost token, or you do not control the IRC server, you can configure a URL manually via [`filehost.override_url`](/configuration/servers#override_url).
 
 ## Authentication
 
