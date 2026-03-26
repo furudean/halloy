@@ -7,11 +7,12 @@ Added:
 Fixed:
 
 - `sidebar.order_by` setting works when set to `"config"`
+- Fix URLs with non-ASCII characters getting percent-encoded when rendered in buffers
 
 Thanks:
 
 - Contributions: @furudean, @omentic
-- Bug reports: sebbu
+- Bug reports: sebbu, @whitequark, @SnoopJ
 
 # 2026.5 (2026-03-21)
 
