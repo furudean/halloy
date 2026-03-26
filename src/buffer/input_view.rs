@@ -2076,24 +2076,7 @@ impl State {
                     {
                         return (Task::none(), None);
                     }
-                    command::Internal::Upload(None) => {
-                        return (
-                            Task::perform(
-                                async {
-                                    rfd::AsyncFileDialog::new()
-                                        .pick_files()
-                                        .await
-                                        .unwrap_or_default()
-                                        .into_iter()
-                                        .map(|h| h.path().to_path_buf())
-                                        .collect()
-                                },
-                                Message::FilesSelected,
-                            ),
-                            None,
-                        );
-                    }
-                    command::Internal::Upload(Some(path)) => {
+                    command::Internal::Upload(path) => {
                         let file_path = std::path::PathBuf::from(&path);
                         if !file_path.exists() {
                             self.error =

@@ -41,7 +41,7 @@ pub enum Internal {
     Detach(Vec<target::Channel>),
     Connect(String),
     Reconnect,
-    Upload(Option<String>),
+    Upload(String),
     Exec(String),
 }
 
@@ -1510,7 +1510,7 @@ fn parse_command(
             Kind::Reconnect => validated::<0, 0, false>(args, |_, _| {
                 Ok(Command::Internal(Internal::Reconnect))
             }),
-            Kind::Upload => validated::<0, 1, true>(args, |_, [path]| {
+            Kind::Upload => validated::<1, 0, true>(args, |[path], _| {
                 Ok(Command::Internal(Internal::Upload(path)))
             }),
             Kind::Exec => {
