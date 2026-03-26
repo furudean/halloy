@@ -27,6 +27,7 @@ use tokio::time;
 use unicode_segmentation::UnicodeSegmentation;
 
 use self::completion::Completion;
+use self::exec::run as execute_shell_command;
 use crate::widget::key_press::is_numpad;
 use crate::widget::{
     Element, Renderer, Text, anchored_overlay, context_menu, decorate, text,
@@ -35,6 +36,7 @@ use crate::window::Window;
 use crate::{Theme, font, theme, window};
 
 mod completion;
+mod exec;
 
 const TYPING_REFRESH_INTERVAL: Duration = Duration::from_secs(4);
 
@@ -63,6 +65,10 @@ pub enum Event {
 pub enum Message {
     Action(text_editor::Action),
     CloseContextMenu(window::Id, bool),
+    ExecFinished {
+        buffer: Upstream,
+        result: Result<String, String>,
+    },
     SysInfoReceived(iced::system::Information),
     Send,
     DeleteWordForward(bool),
@@ -429,6 +435,7 @@ pub fn view<'a>(
         context_menu::MouseButton::default(),
         context_menu::Anchor::Cursor,
         context_menu::ToggleBehavior::KeepOpen,
+        Some(mouse::Interaction::Text),
         text_input,
         Actions::list(),
         move |menu, length| {
@@ -496,7 +503,6 @@ pub fn view<'a>(
             }
         },
     )
-    .mouse_interaction_on_hover(iced::advanced::mouse::Interaction::Text)
     .into();
 
     let our_user_style = {
@@ -638,6 +644,50 @@ impl State {
         let current_target = buffer.target();
 
         match message {
+            Message::ExecFinished { buffer, result } => match result {
+                Ok(output) => {
+                    let parsed = input::parse(
+                        buffer.clone(),
+                        AutoFormat::Disabled,
+                        output.as_str(),
+                        None,
+                        clients.nickname(buffer.server()),
+                        buffer.channel().map(|target| {
+                            clients
+                                .get_channels(buffer.server())
+                                .any(|channel| target == channel)
+                        }),
+                        clients.get_server_is_connected(buffer.server()),
+                        &clients.get_isupport(buffer.server()),
+                        clients.get_multiline_limits(buffer.server()).as_ref(),
+                        clients.get_relay_bytes(buffer.server()),
+                        config,
+                    );
+
+                    match parsed {
+                        Ok(input::Parsed::Internal(
+                            command::Internal::Exec(_),
+                        )) => {
+                            self.error = Some(String::from(
+                                "exec output cannot invoke /exec",
+                            ));
+
+                            (Task::none(), None)
+                        }
+                        Ok(parsed) => self.send_input_line(
+                            parsed, &buffer, clients, history, config,
+                        ),
+                        Err(error) => {
+                            self.error = Some(error.to_string());
+                            (Task::none(), None)
+                        }
+                    }
+                }
+                Err(error) => {
+                    self.error = Some(error);
+                    (Task::none(), None)
+                }
+            },
             Message::SysInfoReceived(info) => {
                 let sysinfo_config = &config.buffer.commands.sysinfo;
 
@@ -1190,38 +1240,7 @@ impl State {
 
                             if let Some(Err(error)) =
                                 self.parsed.get(cursor_position.line)
-                                && match error {
-                                    input::Error::ExceedsByteLimit {
-                                        ..
-                                    }
-                                    | input::Error::Command(
-                                        command::Error::InvalidModeString
-                                        | command::Error::ArgTooLong { .. }
-                                        | command::Error::TooManyTargets {
-                                            ..
-                                        }
-                                        | command::Error::NotPositiveInteger
-                                        | command::Error::InvalidChannelName {
-                                            ..
-                                        }
-                                        | command::Error::InvalidServerUrl,
-                                    ) => true,
-                                    input::Error::Command(
-                                        command::Error::IncorrectArgCount {
-                                            actual,
-                                            max,
-                                            ..
-                                        },
-                                    ) => actual > max,
-                                    input::Error::Command(
-                                        command::Error::MissingSlash
-                                        | command::Error::MissingCommand
-                                        | command::Error::NoModeString
-                                        | command::Error::Connected
-                                        | command::Error::Disconnected
-                                        | command::Error::NotInChannel,
-                                    ) => false,
-                                }
+                                && show_while_typing(error)
                             {
                                 self.error = Some(error.to_string());
                             }
@@ -1824,6 +1843,33 @@ impl State {
                             Some(Event::Reconnect(buffer.server().clone())),
                         );
                     }
+                    command::Internal::Exec(command) => {
+                        if !config.buffer.commands.exec.enabled {
+                            self.error = Some(String::from(
+                                "exec is not enabled by the user",
+                            ));
+
+                            return (Task::none(), None);
+                        }
+
+                        let buffer = buffer.clone();
+                        let exec = config.buffer.commands.exec.clone();
+
+                        return (
+                            Task::perform(
+                                execute_shell_command(
+                                    command,
+                                    exec.timeout,
+                                    exec.max_output_bytes,
+                                ),
+                                move |result| Message::ExecFinished {
+                                    buffer,
+                                    result,
+                                },
+                            ),
+                            None,
+                        );
+                    }
                 }
             }
             input::Parsed::Input(input) => input,
@@ -1993,30 +2039,7 @@ impl State {
             self.error = None;
 
             if let Some(Err(error)) = self.parsed.get(cursor_position.line)
-                && match error {
-                    input::Error::ExceedsByteLimit { .. }
-                    | input::Error::Command(
-                        command::Error::InvalidModeString
-                        | command::Error::ArgTooLong { .. }
-                        | command::Error::TooManyTargets { .. }
-                        | command::Error::NotPositiveInteger
-                        | command::Error::InvalidChannelName { .. }
-                        | command::Error::InvalidServerUrl,
-                    ) => true,
-                    input::Error::Command(
-                        command::Error::IncorrectArgCount {
-                            actual, max, ..
-                        },
-                    ) => actual > max,
-                    input::Error::Command(
-                        command::Error::MissingSlash
-                        | command::Error::MissingCommand
-                        | command::Error::NoModeString
-                        | command::Error::Connected
-                        | command::Error::Disconnected
-                        | command::Error::NotInChannel,
-                    ) => false,
-                }
+                && show_while_typing(error)
             {
                 self.error = Some(error.to_string());
             }
@@ -2335,4 +2358,36 @@ impl State {
 
 fn input_lines(text: &str) -> impl Iterator<Item = &str> {
     text.split('\n')
+}
+
+fn show_while_typing(error: &input::Error) -> bool {
+    match error {
+        input::Error::ExceedsByteLimit { .. }
+        | input::Error::Command(
+            command::Error::InvalidModeString
+            | command::Error::ArgTooLong { .. }
+            | command::Error::TooManyTargets { .. }
+            | command::Error::NotPositiveInteger
+            | command::Error::InvalidChannelName { .. }
+            | command::Error::InvalidServerUrl
+            | command::Error::InvalidChathistoryMessageReference
+            | command::Error::InvalidChathistoryTimestamp
+            | command::Error::ChathistoryLimitTooLarge { .. }
+            | command::Error::ExecDisabled,
+        ) => true,
+        input::Error::Command(command::Error::IncorrectArgCount {
+            actual,
+            max,
+            ..
+        }) => actual > max,
+        input::Error::Command(
+            command::Error::MissingSlash
+            | command::Error::MissingCommand
+            | command::Error::InvalidChathistorySubcommand
+            | command::Error::NoModeString
+            | command::Error::Connected
+            | command::Error::Disconnected
+            | command::Error::NotInChannel,
+        ) => false,
+    }
 }

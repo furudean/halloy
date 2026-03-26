@@ -9,7 +9,7 @@ use iced::widget::{
     Column, Row, Scrollable, Space, button, column, container, pane_grid, row,
     rule, scrollable, space, stack,
 };
-use iced::{Alignment, Length, Padding, Task, padding};
+use iced::{Alignment, Length, Padding, Task, mouse, padding};
 use tokio::time;
 
 use super::{Focus, Panes, Server};
@@ -232,6 +232,7 @@ impl Sidebar {
                     context_menu::MouseButton::Left,
                     context_menu::Anchor::Widget,
                     context_menu::ToggleBehavior::Close,
+                    Some(mouse::Interaction::Pointer),
                     base,
                     menu,
                     move |menu, length| {
@@ -414,7 +415,7 @@ impl Sidebar {
                             ),
                             Menu::OpenConfigFile => context_button(
                                 text("Open config file"),
-                                None,
+                                Some(&keyboard.open_config_file),
                                 icon::config(),
                                 Message::OpenConfigFile,
                             ),
@@ -1107,6 +1108,7 @@ fn upstream_buffer_button<'a>(
             context_menu::MouseButton::default(),
             context_menu::Anchor::Cursor,
             context_menu::ToggleBehavior::KeepOpen,
+            Some(mouse::Interaction::Pointer),
             base,
             entries,
             move |entry, length| {

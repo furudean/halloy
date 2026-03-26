@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::format::SecondsFormat;
-use chrono::{DateTime, Local, NaiveDate, NaiveTime, Utc};
+use chrono::{DateTime, Local, NaiveDate, Utc};
 use iced::Color;
 use serde::{Deserialize, Deserializer};
 
@@ -159,6 +159,24 @@ pub struct Part {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
+pub struct Exec {
+    pub enabled: bool,
+    pub timeout: u64,
+    pub max_output_bytes: usize,
+}
+
+impl Default for Exec {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            timeout: 5,
+            max_output_bytes: 4096,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct SysInfo {
     pub cpu: bool,
     pub memory: bool,
@@ -183,6 +201,7 @@ impl Default for SysInfo {
 #[serde(default)]
 pub struct Commands {
     pub show_description: bool,
+    pub exec: Exec,
     pub sysinfo: SysInfo,
     pub quit: Quit,
     pub part: Part,
@@ -194,6 +213,7 @@ impl Default for Commands {
     fn default() -> Self {
         Self {
             show_description: true,
+            exec: Exec::default(),
             sysinfo: SysInfo::default(),
             quit: Quit::default(),
             part: Part::default(),
@@ -750,31 +770,30 @@ impl Buffer {
                 .format_localized(copy_format, self.timestamp.locale)
                 .to_string()
         } else {
-            date_time.to_rfc3339_opts(SecondsFormat::Millis, true)
+            date_time
+                .with_timezone(&Local)
+                .to_rfc3339_opts(SecondsFormat::Millis, true)
         }
     }
 
     pub fn format_date_separator(&self, date: &NaiveDate) -> String {
-        date.and_time(
-            NaiveTime::from_hms_opt(0, 0, 0).expect("midnight is valid"),
-        )
-        .and_local_timezone(Local)
-        .single()
-        .map_or(
-            // in the event of timezone weirdness,
-            // revert to default format
-            date.format_localized(
-                &DateSeparators::default().format,
-                self.timestamp.locale,
-            ),
-            |date_time| {
-                date_time.format_localized(
-                    &self.date_separators.format,
+        date.and_hms_opt(0, 0, 0)
+            .and_then(|date_time| date_time.and_local_timezone(Local).single())
+            .map_or(
+                // in the event of timezone weirdness,
+                // revert to default format
+                date.format_localized(
+                    &DateSeparators::default().format,
                     self.timestamp.locale,
-                )
-            },
-        )
-        .to_string()
+                ),
+                |date_time| {
+                    date_time.format_localized(
+                        &self.date_separators.format,
+                        self.timestamp.locale,
+                    )
+                },
+            )
+            .to_string()
     }
 }
 
