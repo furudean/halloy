@@ -114,8 +114,10 @@ impl Modal {
                     (Task::none(), None)
                 }
             },
-            Message::OpenURL(url) => {
-                let _ = open_url::open(url);
+            Message::OpenURL(raw_url) => {
+                let canonical = url::Url::parse(&raw_url)
+                    .map_or(raw_url, |u| u.to_string());
+                let _ = open_url::open(canonical);
                 let close = !matches!(self, Modal::ConfirmFileUpload { .. });
                 (Task::none(), close.then_some(Event::CloseModal))
             }

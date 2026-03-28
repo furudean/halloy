@@ -1,5 +1,24 @@
 # Unreleased
 
+Added:
+
+- <kbd>ctrl</kbd> + <kbd>,</kbd> now opens the config file (<kbd>⌘</kbd> + <kbd>,</kbd> on macOs)
+- Windows MSI installer does not automatically start Halloy during passive or quiet installations
+
+Fixed:
+
+- `sidebar.order_by` setting works when set to `"config"`
+- Server notices with wildcard targets (for example `NOTICE *`) are shown in the server buffer again
+- Fix URLs with non-ASCII characters getting percent-encoded when rendered in buffers
+- chathistory: support for TARGETS pagination and more conservative treatment of pagination on reconnect
+- Keyboard shortcuts now work in popped out buffer windows, including command bar shortcuts
+- IRC URIs now handle bracketed IPv6 hosts and percent-encoded channel targets correctly
+
+Thanks:
+
+- Contributions: @furudean, @omentic, @KaiKorla
+- Bug reports: sebbu, @whitequark, @SnoopJ, esden, @miyukoc
+
 # 2026.5 (2026-03-21)
 
 Added:
