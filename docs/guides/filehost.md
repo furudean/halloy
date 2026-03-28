@@ -1,6 +1,6 @@
 # File Uploads
 
-Halloy supports file uploads via the [`draft/FILEHOST`](https://github.com/progval/ircv3-specifications/blob/filehost/extensions/filehost.md) and [`soju.im/filehost`](https://soju.im/filehost) IRC extensions. When a file is uploaded, the resulting URL is inserted into the message input.
+Halloy supports file uploads via the `draft/FILEHOST` and [`soju.im/filehost`](https://soju.im/filehost) IRC extensions. When a file is uploaded, the resulting URL is inserted into the message input.
 
 Uploads can be triggered by:
 
