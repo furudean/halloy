@@ -4467,18 +4467,7 @@ impl Map {
         let filehost =
             client.config.filehost.as_ref().unwrap_or(&default_filehost);
 
-        let send = match filehost.send_credentials {
-            config::server::SendCredentials::Never => return None,
-            config::server::SendCredentials::Always => true,
-            config::server::SendCredentials::ToBouncer => {
-                isupport::get_filehost(&client.isupport).is_some()
-                    && client
-                        .capabilities
-                        .acknowledged(Capability::BouncerNetworks)
-            }
-        };
-
-        if !send {
+        if !filehost.send_credentials {
             return None;
         }
 

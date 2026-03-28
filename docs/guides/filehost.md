@@ -47,10 +47,13 @@ If your server does not allow advertising a filehost token, or you do not contro
 
 ## Authentication
 
-[`filehost.send_credentials`](/configuration/servers#send_credentials) controls when Halloy attaches your SASL plain credentials to upload requests. The default `"to-bouncer"` automatically sends credentials when a filehost is advertised alongside the `soju.im/bouncer-networks` capability. Set it to `"always"` to send credentials to any filehost, or `"never"` to disable.
+[`filehost.send_credentials`](/configuration/servers#send_credentials) controls whether Halloy sends credentials with upload requests. It defaults to `true`.
+
+- **SASL PLAIN** — sends an `Authorization` header with server `username:password`
+- **SASL EXTERNAL** — presents the client certificate
 
 ::: warning
-Only use `send_credentials = "always"` if you trust the filehost server. Your username and password will be sent with uploads.
+Only send credentials to filehosts you trust.
 :::
 
 ```toml
@@ -63,9 +66,9 @@ nickname = "you"
 username = "you"
 password = "hunter2"
 
-# send credentials when uploading
+# alternatively, disable sending credentials when uploading
 [servers.<name>.filehost]
-send_credentials = "always"
+send_credentials = false
 ```
 
 ## Limitations

@@ -244,8 +244,8 @@ pub struct Filehost {
     /// Override the filehost URL advertised by the server via ISUPPORT
     pub override_url: Option<String>,
     /// Send an `Authorization` header with file upload requests.
-    /// Defaults to `"to-bouncer"`.
-    pub send_credentials: SendCredentials,
+    /// Defaults to `true`.
+    pub send_credentials: bool,
 }
 
 impl Default for Filehost {
@@ -253,21 +253,9 @@ impl Default for Filehost {
         Self {
             enabled: true,
             override_url: None,
-            send_credentials: SendCredentials::default(),
+            send_credentials: true,
         }
     }
-}
-
-#[derive(PartialEq, Eq, Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SendCredentials {
-    /// Send credentials only when `soju.im/FILEHOST` and `soju.im/bouncer-networks` are both detected.
-    #[default]
-    ToBouncer,
-    /// Always send credentials with file uploads.
-    Always,
-    /// Never send credentials with file uploads.
-    Never,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Deserialize)]
