@@ -4409,9 +4409,14 @@ impl Map {
                 username, password, ..
             } => Some(fileupload::Auth::Basic {
                 username: username.clone(),
-                password: password.clone(),
+                password: password.clone()?,
             }),
-            config::server::Sasl::External { .. } => None,
+            config::server::Sasl::External { cert, key, .. } => {
+                Some(fileupload::Auth::External {
+                    cert: cert.clone(),
+                    key: key.clone(),
+                })
+            }
         }
     }
 

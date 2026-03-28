@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use reqwest::{Client, header};
@@ -16,23 +16,19 @@ pub enum Error {
     Http(#[from] reqwest::Error),
     #[error("server did not return a Location header")]
     NoLocation,
+    #[error("client certificate error: {0}")]
+    ClientCert(String),
 }
 
 pub enum Auth {
-    Basic {
-        username: String,
-        password: Option<String>,
-    },
+    Basic { username: String, password: String },
+    External { cert: PathBuf, key: Option<PathBuf> },
 }
 
 /// Upload the file at `path` to `upload_url`.
 ///
 /// Returns the public URL of the uploaded file as reported by the server's
 /// `Location` header.
-///
-/// * `irc_uses_tls` — when `true`, plaintext `http://` upload URIs are
-///   rejected (spec requirement: must not use unencrypted transport when the
-///   IRC connection is encrypted).
 pub async fn upload(
     upload_url: &str,
     path: &Path,
@@ -56,6 +52,11 @@ pub async fn upload(
         return Err(Error::InsecureTransport);
     }
 
+    // Spec: SASL EXTERNAL is not valid without TLS
+    if matches!(auth, Some(Auth::External { .. })) && base.scheme() != "https" {
+        return Err(Error::InsecureTransport);
+    }
+
     let file_name = path.file_name().map_or_else(
         || String::from("file"),
         |n| n.to_string_lossy().into_owned(),
@@ -64,9 +65,21 @@ pub async fn upload(
     let bytes = tokio::fs::read(path).await?;
     let content_type = infer_mime_type(path, &bytes);
 
+    let (external_client, auth_header) = match &auth {
+        Some(Auth::External { cert, key }) => (
+            Some(sasl_external_client(cert, key.as_deref()).await?),
+            None,
+        ),
+        Some(Auth::Basic { username, password }) => {
+            (None, Some(basic_auth_header(username, password)))
+        }
+        None => (None, None),
+    };
+    let upload_client = external_client.as_ref().map_or(&*client, |c| c);
+
     log::debug!("uploading {file_name} to {base}");
 
-    let mut req = client
+    let mut req = upload_client
         .post(base.clone())
         .header(header::CONTENT_TYPE, content_type)
         .header(
@@ -76,7 +89,7 @@ pub async fn upload(
         .header(header::CONTENT_LENGTH, bytes.len())
         .body(bytes);
 
-    if let Some(value) = auth_header_value(auth) {
+    if let Some(value) = auth_header {
         req = req.header(header::AUTHORIZATION, value);
     }
 
@@ -93,7 +106,7 @@ pub async fn upload(
         .and_then(|v| v.to_str().ok())
         .ok_or(Error::NoLocation)?;
 
-    // Resolve relative Location from host
+    // Spec: Resolve relative Location from host
     let file_url = base
         .join(location)
         .map_err(|e| Error::InvalidUri(e.to_string()))?;
@@ -101,13 +114,32 @@ pub async fn upload(
     Ok(file_url.to_string())
 }
 
-fn auth_header_value(auth: Option<Auth>) -> Option<String> {
+/// HTTP client that presents a TLS client certificate for SASL EXTERNAL
+async fn sasl_external_client(
+    cert: &Path,
+    key: Option<&Path>,
+) -> Result<reqwest::Client, Error> {
+    let cert_bytes = tokio::fs::read(cert).await?;
+    let pem = if let Some(key_path) = key {
+        let key_bytes = tokio::fs::read(key_path).await?;
+        [cert_bytes, key_bytes].concat()
+    } else {
+        cert_bytes
+    };
+
+    let identity = reqwest::tls::Identity::from_pem(&pem)
+        .map_err(|e: reqwest::Error| Error::ClientCert(e.to_string()))?;
+    reqwest::Client::builder()
+        .identity(identity)
+        .build()
+        .map_err(Error::Http)
+}
+
+fn basic_auth_header(username: &str, password: &str) -> String {
     use base64::Engine as _;
-    let Auth::Basic { username, password } = auth?;
-    let password = password?;
     let encoded = base64::engine::general_purpose::STANDARD
         .encode(format!("{username}:{password}"));
-    Some(format!("Basic {encoded}"))
+    format!("Basic {encoded}")
 }
 
 fn infer_mime_type(path: &Path, bytes: &[u8]) -> &'static str {
