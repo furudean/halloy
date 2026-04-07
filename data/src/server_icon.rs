@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io;
 use std::sync::Arc;
 
 use iced::Task;
@@ -14,7 +15,7 @@ mod icon;
 
 #[derive(Debug)]
 pub enum Message {
-    Loaded(Server, Url, Result<Icon, String>),
+    Loaded(Server, Url, Result<Icon, LoadError>),
 }
 
 pub struct Manager {
@@ -103,14 +104,14 @@ fn canonical_icon_url(url: &Url) -> Url {
 async fn load(
     url: Url,
     http_client: Arc<reqwest::Client>,
-) -> Result<Icon, String> {
+) -> Result<Icon, LoadError> {
     let cache_key_url = canonical_icon_url(&url);
 
     if let Some(state) = cache::load(&cache_key_url, http_client.clone()).await
     {
         match state {
             cache::State::Ok(icon) => Ok(icon),
-            cache::State::Error => Err("cached failed".to_string()),
+            cache::State::Error => Err(LoadError::CachedFailed),
         }
     } else {
         match fetch(url.clone(), http_client).await {
@@ -132,30 +133,19 @@ async fn load(
 async fn fetch(
     url: Url,
     http_client: Arc<reqwest::Client>,
-) -> Result<Icon, String> {
+) -> Result<Icon, LoadError> {
     let response = http_client
         .get(url.clone())
         .send()
-        .await
-        .map_err(|error| format!("request failed: {error}"))?;
+        .await?
+        .error_for_status()?;
 
-    if !response.status().is_success() {
-        return Err(format!(
-            "request failed with status {}",
-            response.status()
-        ));
-    }
+    let bytes = response.bytes().await.map_err(LoadError::Reqwest)?;
 
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|error| format!("failed to read response body: {error}"))?;
-
-    let format = image::guess_format(&bytes)
-        .map_err(|error| format!("unsupported image format: {error}"))?;
+    let format = image::guess_format(&bytes).map_err(LoadError::ParseImage)?;
 
     if format != image::ImageFormat::Ico {
-        return Err(format!("unsupported image format: {format:?}"));
+        return Err(LoadError::NotIco);
     }
 
     let mut hasher = Sha256::default();
@@ -166,17 +156,33 @@ async fn fetch(
 
     if !image_path.exists() {
         if let Some(parent) = image_path.parent().filter(|p| !p.exists()) {
-            let _ = fs::create_dir_all(parent).await;
+            fs::create_dir_all(parent).await?;
         }
 
-        fs::write(&image_path, bytes.as_ref())
-            .await
-            .map_err(|error| {
-                format!("failed to write icon cache file: {error}")
-            })?;
+        fs::write(&image_path, bytes.as_ref()).await?;
 
         cache::maybe_trim_icon_cache(bytes.len() as u64, image_path.clone());
     }
 
     Ok(Icon::new(url, digest))
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum LoadError {
+    #[error("cached failed attempt")]
+    CachedFailed,
+    #[error("empty body")]
+    EmptyBody,
+    #[error("url is not an image")]
+    NotImage,
+    #[error("url is not ICO image")]
+    NotIco,
+    #[error("failed to parse image: {0}")]
+    ParseImage(#[from] icon::Error),
+    #[error("request failed: {0}")]
+    Reqwest(#[from] reqwest::Error),
+    #[error("failed to parse url: {0}")]
+    ParseUrl(#[from] url::ParseError),
+    #[error("io error: {0}")]
+    Io(#[from] io::Error),
 }
