@@ -51,6 +51,7 @@ pub mod rate_limit;
 pub mod reaction;
 pub mod serde;
 pub mod server;
+pub mod server_icon;
 pub mod shortcut;
 pub mod stream;
 pub mod target;

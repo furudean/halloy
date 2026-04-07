@@ -1663,7 +1663,12 @@ fn handle_client_events(
             }
             Event::AddedIsupportParam(param) => {
                 handle_isupport_param(
-                    server, param, dashboard, clients, config,
+                    server,
+                    param,
+                    dashboard,
+                    clients,
+                    config,
+                    &mut commands,
                 );
             }
             Event::BouncerNetwork(server, server_config) => {
@@ -2176,6 +2181,7 @@ fn handle_isupport_param(
     dashboard: &mut screen::Dashboard,
     clients: &mut data::client::Map,
     config: &Config,
+    commands: &mut Vec<Task<Message>>,
 ) {
     if matches!(param, data::isupport::Parameter::CASEMAPPING(_)) {
         dashboard.renormalize_history(server, clients);
@@ -2197,6 +2203,16 @@ fn handle_isupport_param(
         }
         data::isupport::Parameter::SAFELIST => {
             dashboard.update_channel_discoveries(clients, server);
+        }
+        data::isupport::Parameter::ICON(_) => {
+            let icon_url = clients.get_icon_url(server);
+
+            let task = Task::done(dashboard::Message::UpdateServerIcon(
+                server.clone(),
+                icon_url.map(ToOwned::to_owned),
+            ));
+
+            commands.push(task.map(Message::Dashboard));
         }
         _ => (),
     }
