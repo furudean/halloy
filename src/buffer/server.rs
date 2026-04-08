@@ -280,6 +280,7 @@ pub fn view<'a>(
                     _ => None,
                 }
             },
+            clients.get_registry(&state.server),
         )
         .map(Message::ScrollView),
     )

@@ -150,6 +150,7 @@ pub fn view<'a>(
             config,
             theme,
             message_formatter,
+            clients.get_registry(&state.server),
         )
         .map(Message::ScrollView),
     )

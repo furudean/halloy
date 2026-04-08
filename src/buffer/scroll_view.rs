@@ -14,7 +14,7 @@ use data::rate_limit::TokenPriority;
 use data::reaction::Reaction;
 use data::server::Server;
 use data::target::{self, Target};
-use data::{Config, Preview, client, history, reaction};
+use data::{Config, Preview, client, history, metadata, reaction};
 use iced::widget::{
     self, Scrollable, button, center, column, container, image, mouse_area,
     right, row, rule, scrollable, space, stack, text,
@@ -136,6 +136,7 @@ pub trait LayoutMessage<'a> {
         max_prefix_width: Option<f32>,
         hide_timestamp: bool,
         hide_nickname: bool,
+        registry: &'a dyn metadata::Registry,
     ) -> Option<Element<'a, Message>>;
 }
 
@@ -156,6 +157,7 @@ where
         max_prefix_width: Option<f32>,
         hide_timestamp: bool,
         hide_nickname: bool,
+        _registry: &dyn metadata::Registry,
     ) -> Option<Element<'a, Message>> {
         self(
             message,
@@ -250,6 +252,7 @@ pub fn view<'a>(
     config: &'a Config,
     theme: &'a Theme,
     formatter: impl LayoutMessage<'a> + 'a,
+    registry: &'a dyn metadata::Registry,
 ) -> Element<'a, Message> {
     let divider_font_size =
         config.font.size.map_or(theme::TEXT_SIZE, f32::from) - 1.0;
@@ -397,6 +400,7 @@ pub fn view<'a>(
                             max_prefix_width,
                             hide_timestamp,
                             hide_nickname,
+                            registry,
                         )
                         .map(|element| (message, element)),
                 )

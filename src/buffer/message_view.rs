@@ -6,8 +6,9 @@ use data::config::buffer::{CondensationIcon, Dimmed};
 use data::isupport::{CaseMap, PrefixMap};
 use data::preview::{self, Previews};
 use data::server::Server;
+use data::target::{Query, TargetRef};
 use data::user::{ChannelUsers, NickRef};
-use data::{Config, User, message, target};
+use data::{Config, User, message, metadata, target};
 use iced::widget::{Space, button, column, container, row, text};
 use iced::{Color, Length, alignment};
 
@@ -356,6 +357,7 @@ impl<'a> ChannelQueryLayout<'a> {
         right_aligned_width: Option<f32>,
         user: &'a User,
         hide_nickname: bool,
+        registry: &'a dyn metadata::Registry,
     ) -> (
         Element<'a, Message>,
         Element<'a, Message>,
@@ -369,12 +371,8 @@ impl<'a> ChannelQueryLayout<'a> {
 
         let with_access_levels = self.config.buffer.nickname.show_access_levels;
         let truncate = self.config.buffer.nickname.truncate;
-        let user_in_channel = self
-            .target
-            .users()
-            .into_iter()
-            .flatten()
-            .find(|current_user| *current_user == user);
+        let user_in_channel =
+            self.target.users().and_then(|users| users.resolve(user));
         let rerouted_private = message.is_rerouted();
         let is_user_offline = if rerouted_private {
             false
@@ -407,7 +405,7 @@ impl<'a> ChannelQueryLayout<'a> {
 
         let (user_display, show_nickname_tooltip) =
             user.display_with_truncated(with_access_levels, truncate);
-        let nick_text =
+        let mut nick_text =
             self.config.buffer.nickname.brackets.format(user_display);
 
         let nick_element: Element<_> = if hide_nickname {
@@ -423,6 +421,11 @@ impl<'a> ChannelQueryLayout<'a> {
             };
             Space::new().width(width).into()
         } else {
+            if let Some(display_name) =
+                registry.display_name(TargetRef::Query(&Query::from(user)))
+            {
+                nick_text = format!("{display_name} ({nick_text})");
+            }
             let mut nick_text = selectable_text(nick_text)
                 .style(move |_| nickname_style)
                 .font_maybe(
@@ -616,12 +619,8 @@ impl<'a> ChannelQueryLayout<'a> {
             }),
             move |link| match link {
                 message::Link::User(_, user) => {
-                    let user_in_channel = formatter
-                        .target
-                        .users()
-                        .into_iter()
-                        .flatten()
-                        .find(|u| *u == user);
+                    let user_in_channel =
+                        formatter.target.users().and_then(|u| u.resolve(user));
 
                     context_menu::Entry::user_list(
                         formatter.target.is_channel(),
@@ -747,12 +746,8 @@ impl<'a> ChannelQueryLayout<'a> {
             }),
             move |link| match link {
                 message::Link::User(_, user) => {
-                    let user_in_channel = formatter
-                        .target
-                        .users()
-                        .into_iter()
-                        .flatten()
-                        .find(|u| *u == user);
+                    let user_in_channel =
+                        formatter.target.users().and_then(|u| u.resolve(user));
 
                     context_menu::Entry::user_list(
                         formatter.target.is_channel(),
@@ -838,6 +833,7 @@ impl<'a> LayoutMessage<'a> for ChannelQueryLayout<'a> {
         max_prefix_width: Option<f32>,
         hide_timestamp: bool,
         hide_nickname: bool,
+        registry: &'a dyn metadata::Registry,
     ) -> Option<Element<'a, Message>> {
         let prefixes = self.format_prefixes(message, max_prefix_width);
 
@@ -855,6 +851,7 @@ impl<'a> LayoutMessage<'a> for ChannelQueryLayout<'a> {
                 right_aligned_width,
                 user,
                 hide_nickname,
+                registry,
             )),
             message::Source::Server(server_message) => {
                 Some(self.format_server_message(
@@ -915,9 +912,7 @@ impl<'a> LayoutMessage<'a> for ChannelQueryLayout<'a> {
                             let user_in_channel = formatter
                                 .target
                                 .users()
-                                .into_iter()
-                                .flatten()
-                                .find(|u| *u == user);
+                                .and_then(|u| u.resolve(user));
 
                             context_menu::Entry::user_list(
                                 formatter.target.is_channel(),

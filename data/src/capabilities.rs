@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::string::ToString;
 use std::sync::LazyLock;
@@ -32,6 +32,7 @@ pub enum Capability {
     MessageTags,
     Multiline,
     MultiPrefix,
+    Metadata,
     ReadMarker,
     Sasl,
     ServerTime,
@@ -59,6 +60,7 @@ impl FromStr for Capability {
             "labeled-response" => Ok(Self::LabeledResponse),
             "message-tags" => Ok(Self::MessageTags),
             "multi-prefix" => Ok(Self::MultiPrefix),
+            "draft/metadata-2" => Ok(Self::Metadata),
             "server-time" => Ok(Self::ServerTime),
             "setname" => Ok(Self::Setname),
             "soju.im/bouncer-networks" => Ok(Self::BouncerNetworks),
@@ -198,7 +200,7 @@ pub enum MultilineBatchKind {
 #[derive(Debug, Default)]
 pub struct Capabilities {
     listed: HashSet<String>,
-    pending: HashSet<String>,
+    pending: HashMap<String, String>,
     acknowledged: HashSet<Capability>,
     multiline: Option<MultilineLimits>,
 }
@@ -222,63 +224,63 @@ impl Capabilities {
     ) -> Vec<&'static str> {
         let mut requested = vec![];
 
-        if self.pending.contains("invite-notify")
+        if self.pending.contains_key("invite-notify")
             && !self.acknowledged(Capability::InviteNotify)
         {
             requested.push("invite-notify");
         }
 
-        if self.pending.contains("userhost-in-names")
+        if self.pending.contains_key("userhost-in-names")
             && !self.acknowledged(Capability::UserhostInNames)
         {
             requested.push("userhost-in-names");
         }
 
-        if self.pending.contains("away-notify")
+        if self.pending.contains_key("away-notify")
             && !self.acknowledged(Capability::AwayNotify)
         {
             requested.push("away-notify");
         }
 
-        if self.pending.contains("message-tags")
+        if self.pending.contains_key("message-tags")
             && !self.acknowledged(Capability::MessageTags)
         {
             requested.push("message-tags");
         }
 
-        if self.pending.contains("server-time")
+        if self.pending.contains_key("server-time")
             && !self.acknowledged(Capability::ServerTime)
         {
             requested.push("server-time");
         }
 
-        if self.pending.contains("chghost")
+        if self.pending.contains_key("chghost")
             && !self.acknowledged(Capability::Chghost)
         {
             requested.push("chghost");
         }
 
-        if self.pending.contains("extended-monitor")
+        if self.pending.contains_key("extended-monitor")
             && !self.acknowledged(Capability::ExtendedMonitor)
         {
             requested.push("extended-monitor");
         }
 
-        if self.pending.contains("account-notify")
+        if self.pending.contains_key("account-notify")
             || self.acknowledged(Capability::AccountNotify)
         {
             if !self.acknowledged(Capability::AccountNotify) {
                 requested.push("account-notify");
             }
 
-            if self.pending.contains("extended-join")
+            if self.pending.contains_key("extended-join")
                 && !self.acknowledged(Capability::ExtendedJoin)
             {
                 requested.push("extended-join");
             }
         }
 
-        if self.pending.contains("batch")
+        if self.pending.contains_key("batch")
             || self.acknowledged(Capability::Batch)
         {
             if !self.acknowledged(Capability::Batch) {
@@ -286,7 +288,7 @@ impl Capabilities {
             }
 
             // We require batch for chathistory support
-            if (self.pending.contains("draft/chathistory")
+            if (self.pending.contains_key("draft/chathistory")
                 && config.chathistory)
                 || self.acknowledged(Capability::Chathistory)
             {
@@ -294,7 +296,7 @@ impl Capabilities {
                     requested.push("draft/chathistory");
                 }
 
-                if self.pending.contains("draft/event-playback")
+                if self.pending.contains_key("draft/event-playback")
                     && !self.acknowledged(Capability::EventPlayback)
                 {
                     requested.push("draft/event-playback");
@@ -302,53 +304,49 @@ impl Capabilities {
             }
         }
 
-        if self.pending.contains("labeled-response")
+        if self.pending.contains_key("labeled-response")
             && !self.acknowledged(Capability::LabeledResponse)
         {
             requested.push("labeled-response");
         }
 
-        if self.pending.contains("echo-message")
+        if self.pending.contains_key("echo-message")
             && !self.acknowledged(Capability::EchoMessage)
         {
             requested.push("echo-message");
         }
 
-        if self.pending.contains("multi-prefix")
+        if self.pending.contains_key("multi-prefix")
             && !self.acknowledged(Capability::MultiPrefix)
         {
             requested.push("multi-prefix");
         }
 
-        if self.pending.contains("draft/read-marker")
+        if self.pending.contains_key("draft/read-marker")
             && !self.acknowledged(Capability::ReadMarker)
         {
             requested.push("draft/read-marker");
         }
 
-        if self.pending.contains("setname")
+        if self.pending.contains_key("setname")
             && !self.acknowledged(Capability::Setname)
         {
             requested.push("setname");
         }
 
-        if self.pending.contains("soju.im/bouncer-networks")
+        if self.pending.contains_key("soju.im/bouncer-networks")
             && !self.acknowledged(Capability::BouncerNetworks)
         {
             requested.push("soju.im/bouncer-networks");
         }
 
-        if self.pending.iter().any(|cap| cap.starts_with("sasl"))
+        if self.pending.iter().any(|(cap, _)| cap.starts_with("sasl"))
             && !self.acknowledged(Capability::Sasl)
         {
             requested.push("sasl");
         }
 
-        if let Some(multiline) = self
-            .pending
-            .iter()
-            .find_map(|cap| cap.strip_prefix("draft/multiline="))
-        {
+        if let Some(multiline) = self.pending.get("draft/multiline") {
             let dictionary = multiline.split(',').collect::<Vec<_>>();
 
             if let Some(max_bytes) = dictionary.iter().find_map(|key_value| {
@@ -371,7 +369,13 @@ impl Capabilities {
             }
         }
 
-        for cap in self.pending.drain() {
+        if self.pending.contains_key("draft/metadata-2")
+            && !self.acknowledged(Capability::Metadata)
+        {
+            requested.push("draft/metadata-2");
+        }
+
+        for (cap, _) in self.pending.drain() {
             self.listed.insert(cap);
         }
 
@@ -388,9 +392,13 @@ impl Capabilities {
         }
     }
 
-    pub fn extend_list(&mut self, caps: impl Iterator<Item = String>) {
+    pub fn extend_list<'a>(&mut self, caps: impl Iterator<Item = &'a str>) {
         for cap in caps {
-            self.pending.insert(cap);
+            if let Some((left, right)) = cap.split_once('=') {
+                self.pending.insert(left.to_string(), right.to_string());
+            } else {
+                self.pending.insert(cap.to_string(), String::new());
+            }
         }
     }
 

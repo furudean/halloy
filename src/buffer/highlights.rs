@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use data::config::buffer::nickname::ShownStatus;
 use data::dashboard::BufferAction;
 use data::target::{self, Target};
-use data::{Config, Preview, Server, history, message};
+use data::{Config, Preview, Server, history, message, metadata};
 use iced::widget::{container, row, span};
 use iced::{Color, Length, Size, Task};
 
@@ -282,6 +282,7 @@ pub fn view<'a>(
                 }
                 _ => None,
             },
+            metadata::EMPTY,
         )
         .map(Message::ScrollView),
     )

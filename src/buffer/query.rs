@@ -124,6 +124,7 @@ pub fn view<'a>(
             config,
             theme,
             message_formatter,
+            clients.get_registry(server),
         )
         .map(Message::ScrollView),
     )
