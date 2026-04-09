@@ -1000,7 +1000,7 @@ impl State {
             Message::Tab(reverse) => {
                 let cursor_position = self.input_content.cursor().position;
 
-                if let Some(entry) = self.completion.tab(reverse)
+                if let Some(entry) = self.completion.tab(reverse, config)
                     && let Some(line) = self
                         .input_content
                         .line(cursor_position.line)
@@ -1015,12 +1015,7 @@ impl State {
                         config,
                     );
 
-                    let result =
-                        self.on_completion(buffer, history, actions, true);
-                    self.process_completion_and_notice(
-                        buffer, clients, history, config,
-                    );
-                    result
+                    self.on_completion(buffer, history, actions, true)
                 } else {
                     (Task::none(), None)
                 }
