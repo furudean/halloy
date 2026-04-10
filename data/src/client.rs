@@ -2904,13 +2904,30 @@ impl Client {
 
                     // request metadata
                     if self.capabilities.acknowledged(Capability::Metadata) {
-                        // TODO(pounce) have list of currently implemented keys somewhere
-                        self.handle.try_send(command!(
-                            "METADATA",
-                            "*",
-                            "SUB",
-                            "display-name",
-                        ))?;
+                        let mut requested = config
+                            .metadata
+                            .preferred_key_strs()
+                            .map(ToString::to_string)
+                            .collect::<Vec<String>>();
+
+                        if let Some(limits) =
+                            self.capabilities.metadata_limits()
+                        {
+                            requested.truncate(limits.max_subs);
+                        }
+
+                        log::debug!(
+                            "[{}] Requesting subs: {requested:?}",
+                            self.server
+                        );
+
+                        if !requested.is_empty() {
+                            let mut args =
+                                vec!["*".to_string(), "SUB".to_string()];
+                            args.extend(requested);
+
+                            self.handle.try_send(command("METADATA", args))?;
+                        }
                     }
 
                     let channels = self

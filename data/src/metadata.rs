@@ -2,17 +2,59 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use iced::Color;
+use serde::Deserialize;
 
 use crate::Url;
 use crate::target::{Channel, Query, Target, TargetRef};
 
 type Metadata = HashMap<String, String>;
 
-pub trait Registry {
-    fn get_user(&self, target: &Query, key: &str) -> Option<&str>;
-    fn get_channel(&self, target: &Channel, key: &str) -> Option<&str>;
+#[derive(Copy, Clone, PartialEq, Eq, Deserialize, Debug)]
+#[serde(rename_all = "kebab-case")]
+pub enum Key {
+    Avatar,
+    Color,
+    DisplayName,
+    Homepage,
+    Pronouns,
+    Status,
+}
 
-    fn get(&self, target: TargetRef<'_>, key: &str) -> Option<&str> {
+impl Key {
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Key::Avatar => "avatar",
+            Key::Color => "color",
+            Key::DisplayName => "display-name",
+            Key::Homepage => "homepage",
+            Key::Pronouns => "pronouns",
+            Key::Status => "status",
+        }
+    }
+}
+use Key::*;
+
+impl FromStr for Key {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "avatar" => Ok(Key::Avatar),
+            "color" => Ok(Key::Color),
+            "display-name" => Ok(Key::DisplayName),
+            "homepage" => Ok(Key::Homepage),
+            "pronouns" => Ok(Key::Pronouns),
+            "status" => Ok(Key::Status),
+            _ => Err(()),
+        }
+    }
+}
+
+pub trait Registry {
+    fn get_user(&self, target: &Query, key: Key) -> Option<&str>;
+    fn get_channel(&self, target: &Channel, key: Key) -> Option<&str>;
+
+    fn get(&self, target: TargetRef<'_>, key: Key) -> Option<&str> {
         match target {
             TargetRef::Channel(channel) => self.get_channel(channel, key),
             TargetRef::Query(query) => self.get_user(query, key),
@@ -22,27 +64,27 @@ pub trait Registry {
     // channel or user metadata
     // https://ircv3.net/registry.html#channel-metadata
     fn avatar(&self, target: TargetRef<'_>) -> Option<&str> {
-        self.get(target, "avatar")
+        self.get(target, Avatar)
     }
     fn display_name(&self, target: TargetRef<'_>) -> Option<&str> {
-        self.get(target, "display-name")
+        self.get(target, DisplayName)
     }
 
     // user metadata
     // https://ircv3.net/registry.html#user-metadata
     fn color(&self, target: &Query) -> Option<Color> {
-        self.get_user(target, "color")
+        self.get_user(target, Color)
             .and_then(|s| Color::from_str(s).ok())
     }
     fn homepage(&self, target: &Query) -> Option<Url> {
-        self.get_user(target, "homepage")
+        self.get_user(target, Homepage)
             .and_then(|s| Url::from_str(s).ok())
     }
     fn status(&self, target: &Query) -> Option<&str> {
-        self.get_user(target, "status, target: &Query")
+        self.get_user(target, Status)
     }
     fn pronouns(&self, target: &Query) -> Option<&str> {
-        self.get_user(target, "pronouns")
+        self.get_user(target, Pronouns)
     }
 }
 
@@ -73,17 +115,17 @@ impl ServerRegistry {
 }
 
 impl Registry for ServerRegistry {
-    fn get_user(&self, target: &Query, key: &str) -> Option<&str> {
+    fn get_user(&self, target: &Query, key: Key) -> Option<&str> {
         self.users
             .get(target)
-            .and_then(|r| r.get(key))
+            .and_then(|r| r.get(key.to_str()))
             .map(String::as_str)
     }
 
-    fn get_channel(&self, target: &Channel, key: &str) -> Option<&str> {
+    fn get_channel(&self, target: &Channel, key: Key) -> Option<&str> {
         self.channels
             .get(target)
-            .and_then(|r| r.get(key))
+            .and_then(|r| r.get(key.to_str()))
             .map(String::as_str)
     }
 }
@@ -91,11 +133,11 @@ impl Registry for ServerRegistry {
 #[derive(Debug, Default)]
 pub struct EmptyRegistry();
 impl Registry for EmptyRegistry {
-    fn get_user(&self, _target: &Query, _key: &str) -> Option<&str> {
+    fn get_user(&self, _target: &Query, _key: Key) -> Option<&str> {
         None
     }
 
-    fn get_channel(&self, _target: &Channel, _key: &str) -> Option<&str> {
+    fn get_channel(&self, _target: &Channel, _key: Key) -> Option<&str> {
         None
     }
 }

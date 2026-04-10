@@ -77,6 +77,69 @@ pub struct MultilineLimits {
     pub max_lines: Option<usize>,
 }
 
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum CapParseError {
+    #[error(transparent)]
+    ParseInt(#[from] std::num::ParseIntError),
+    #[error("Missing key `{0}` in dictionary: {1}")]
+    MissingKey(String, String),
+}
+
+impl FromStr for MultilineLimits {
+    type Err = CapParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let dictionary = s
+            .split(',')
+            .flat_map(|s| s.split_once('='))
+            .collect::<HashMap<_, _>>();
+
+        Ok(MultilineLimits {
+            max_bytes: dictionary
+                .get("max-bytes")
+                .ok_or_else(|| {
+                    CapParseError::MissingKey(
+                        "max-bytes".to_owned(),
+                        s.to_owned(),
+                    )
+                })?
+                .parse::<usize>()?,
+            max_lines: dictionary
+                .get("max-lines")
+                .map(|s| s.parse::<usize>())
+                .transpose()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MetadataLimits {
+    pub max_subs: usize,
+}
+
+impl FromStr for MetadataLimits {
+    type Err = CapParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let dictionary = s
+            .split(',')
+            .flat_map(|s| s.split_once('='))
+            .collect::<HashMap<_, _>>();
+
+        Ok(MetadataLimits {
+            max_subs: dictionary
+                .get("max-subs")
+                .ok_or_else(|| {
+                    CapParseError::MissingKey(
+                        "max-subs".to_owned(),
+                        s.to_owned(),
+                    )
+                })?
+                .parse::<usize>()?,
+        })
+    }
+}
+
 impl MultilineLimits {
     pub fn concat_bytes(
         &self,
@@ -199,10 +262,9 @@ pub enum MultilineBatchKind {
 
 #[derive(Debug, Default)]
 pub struct Capabilities {
-    listed: HashSet<String>,
+    listed: HashMap<String, String>,
     pending: HashMap<String, String>,
     acknowledged: HashSet<Capability>,
-    multiline: Option<MultilineLimits>,
 }
 
 impl Capabilities {
@@ -346,27 +408,11 @@ impl Capabilities {
             requested.push("sasl");
         }
 
-        if let Some(multiline) = self.pending.get("draft/multiline") {
-            let dictionary = multiline.split(',').collect::<Vec<_>>();
-
-            if let Some(max_bytes) = dictionary.iter().find_map(|key_value| {
-                key_value
-                    .strip_prefix("max-bytes=")
-                    .and_then(|value| value.parse::<usize>().ok())
-            }) {
-                self.multiline = Some(MultilineLimits {
-                    max_bytes,
-                    max_lines: dictionary.iter().find_map(|key_value| {
-                        key_value
-                            .strip_prefix("max-lines=")
-                            .and_then(|value| value.parse::<usize>().ok())
-                    }),
-                });
-
-                if !self.acknowledged(Capability::Multiline) {
-                    requested.push("draft/multiline");
-                }
-            }
+        if let Some(multiline) = self.pending.get("draft/multiline")
+            && !self.acknowledged(Capability::Multiline)
+            && MultilineLimits::from_str(multiline).is_ok()
+        {
+            requested.push("draft/multiline");
         }
 
         if self.pending.contains_key("draft/metadata-2")
@@ -375,8 +421,8 @@ impl Capabilities {
             requested.push("draft/metadata-2");
         }
 
-        for (cap, _) in self.pending.drain() {
-            self.listed.insert(cap);
+        for (cap, val) in self.pending.drain() {
+            self.listed.insert(cap, val);
         }
 
         requested
@@ -403,11 +449,21 @@ impl Capabilities {
     }
 
     pub fn multiline_limits(&self) -> Option<MultilineLimits> {
-        if self.acknowledged(Capability::Multiline) {
-            self.multiline
-        } else {
-            None
-        }
+        self.acknowledged(Capability::Multiline)
+            .then(|| {
+                MultilineLimits::from_str(self.listed.get("draft/multiline")?)
+                    .ok()
+            })
+            .flatten()
+    }
+
+    pub fn metadata_limits(&self) -> Option<MetadataLimits> {
+        self.acknowledged(Capability::Metadata)
+            .then(|| {
+                MetadataLimits::from_str(self.listed.get("draft/metadata-2")?)
+                    .ok()
+            })
+            .flatten()
     }
 
     pub fn contains_multiline_limits(&self) -> bool {

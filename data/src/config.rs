@@ -34,6 +34,7 @@ pub use self::window::Window;
 use crate::appearance::theme::Styles;
 use crate::appearance::{self, Appearance};
 use crate::audio::{self};
+use crate::config::metadata::Metadata;
 use crate::serde::{
     deserialize_f32_positive_float_maybe, deserialize_u8_positive_integer_maybe,
 };
@@ -51,6 +52,7 @@ pub mod highlights;
 pub mod inclusivities;
 pub mod keys;
 pub mod logs;
+pub mod metadata;
 pub mod notification;
 pub mod pane;
 pub mod platform_specific;
@@ -88,6 +90,7 @@ pub struct Config {
     pub logs: Logs,
     pub platform_specific: PlatformSpecific,
     pub check_for_update_on_launch: bool,
+    pub metadata: Metadata,
 }
 
 impl Default for Config {
@@ -116,6 +119,7 @@ impl Default for Config {
             logs: Logs::default(),
             platform_specific: PlatformSpecific::default(),
             check_for_update_on_launch: true,
+            metadata: Metadata::default(),
         }
     }
 }
@@ -377,6 +381,7 @@ impl Config {
             pub logs: Logs,
             pub platform_specific: PlatformSpecific,
             pub check_for_update_on_launch: bool,
+            pub metadata: Metadata,
         }
 
         impl Default for Configuration {
@@ -405,6 +410,7 @@ impl Config {
                     logs: Logs::default(),
                     platform_specific: PlatformSpecific::default(),
                     check_for_update_on_launch: true,
+                    metadata: Metadata::default(),
                 }
             }
         }
@@ -444,6 +450,7 @@ impl Config {
             logs,
             platform_specific,
             check_for_update_on_launch,
+            metadata,
         } = serde_ignored::deserialize(config, |ignored| {
             log::warn!("[config.toml] Ignoring unknown setting: {ignored}");
         })
@@ -484,6 +491,7 @@ impl Config {
             logs,
             platform_specific,
             check_for_update_on_launch,
+            metadata,
         })
     }
 
