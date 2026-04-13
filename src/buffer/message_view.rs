@@ -21,6 +21,27 @@ use crate::widget::{
 };
 use crate::{Theme, font, icon, theme};
 
+pub(crate) fn formatted_buffer_nickname(
+    user: &User,
+    config: &Config,
+    registry: &dyn metadata::Registry,
+) -> String {
+    let with_access_levels = config.buffer.nickname.show_access_levels;
+    let truncate = config.buffer.nickname.truncate;
+    let nickname = config
+        .buffer
+        .nickname
+        .brackets
+        .format(user.display(with_access_levels, truncate));
+
+    data::config::display::nickname::format(
+        &nickname,
+        &config.display.nickname,
+        registry.display_name(TargetRef::Query(&Query::from(user))),
+        registry.pronouns(&Query::from(user)),
+    )
+}
+
 #[derive(Clone, Copy)]
 pub enum TargetInfo<'a> {
     Channel {
@@ -403,10 +424,9 @@ impl<'a> ChannelQueryLayout<'a> {
             dimmed_background_tuple,
         );
 
-        let (user_display, show_nickname_tooltip) =
-            user.display_with_truncated(with_access_levels, truncate);
-        let mut nick_text =
-            self.config.buffer.nickname.brackets.format(user_display);
+        let show_nickname_tooltip =
+            user.display_truncated(with_access_levels, truncate);
+        let nick_text = formatted_buffer_nickname(user, self.config, registry);
 
         let nick_element: Element<_> = if hide_nickname {
             let width = match self.config.buffer.nickname.alignment {
@@ -421,11 +441,6 @@ impl<'a> ChannelQueryLayout<'a> {
             };
             Space::new().width(width).into()
         } else {
-            if let Some(display_name) =
-                registry.display_name(TargetRef::Query(&Query::from(user)))
-            {
-                nick_text = format!("{display_name} ({nick_text})");
-            }
             let mut nick_text = selectable_text(nick_text)
                 .style(move |_| nickname_style)
                 .font_maybe(

@@ -174,7 +174,6 @@ pub struct Client {
     mode_requests: Vec<ModeRequest>,
     channel_discovery_manager: channel_discovery::Manager,
     http_client: Option<Arc<reqwest::Client>>, // Only Some if config.proxy.is_some()
-    preview_proxy_client: Option<Arc<reqwest::Client>>,
     registry: metadata::ServerRegistry,
 }
 

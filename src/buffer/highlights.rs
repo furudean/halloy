@@ -9,6 +9,7 @@ use iced::widget::{container, row, span};
 use iced::{Color, Length, Size, Task};
 
 use super::context_menu::{self, Context};
+use super::message_view::formatted_buffer_nickname;
 use super::scroll_view;
 use crate::widget::{
     Element, message_content, selectable_rich_text, selectable_text, tooltip,
@@ -109,11 +110,14 @@ pub fn view<'a>(
                             ShownStatus::Historical => false,
                         };
 
-                    let (user_display, show_nickname_tooltip) = user
-                        .display_with_truncated(with_access_levels, truncate);
+                    let show_nickname_tooltip =
+                        user.display_truncated(with_access_levels, truncate);
 
-                    let nick_text =
-                        config.buffer.nickname.brackets.format(user_display);
+                    let nick_text = formatted_buffer_nickname(
+                        user,
+                        config,
+                        clients.get_registry(server),
+                    );
 
                     let text = selectable_text(nick_text)
                         .font_maybe(

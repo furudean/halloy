@@ -27,6 +27,7 @@ use tokio::time;
 use self::correct_viewport::correct_viewport;
 use self::keyed::keyed;
 use super::context_menu;
+use super::message_view::formatted_buffer_nickname;
 use crate::widget::{
     Element, notify_visibility, on_resize, selectable_text, tooltip,
 };
@@ -262,7 +263,6 @@ pub fn view<'a>(
         has_more_newer_messages,
         old_messages,
         new_messages,
-        max_nick_chars,
         max_prefix_chars,
         range_end_timestamp_chars,
         cleared,
@@ -312,9 +312,27 @@ pub fn view<'a>(
         .map_or_else(Utc::now, |message| message.server_time);
     let status = state.status;
 
-    let right_aligned_width = max_nick_chars.map(|max_nick_chars| {
-        let max_nick_width =
-            font::width_from_chars(max_nick_chars, &config.font) + 1.0;
+    let max_nick_width =
+        config.buffer.nickname.alignment.is_right().then(|| {
+            old_messages
+                .iter()
+                .chain(&new_messages)
+                .filter_map(|message| match message.target.source() {
+                    message::Source::User(user) => Some(
+                        formatted_buffer_nickname(user, config, registry)
+                            .chars()
+                            .count(),
+                    ),
+                    _ => None,
+                })
+                .max()
+                .map(|max_nick_chars| {
+                    font::width_from_chars(max_nick_chars, &config.font) + 1.0
+                })
+                .unwrap_or_default()
+        });
+
+    let right_aligned_width = max_nick_width.map(|max_nick_width| {
         let message_marker_width =
             font::width_of_message_marker(&config.font) + 1.0;
         let mut range_end_timestamp_width = range_end_timestamp_chars.map_or(
@@ -465,6 +483,7 @@ pub fn view<'a>(
                                         max_prefix_width,
                                         is_hovered,
                                         config,
+                                        registry,
                                         theme,
                                     ));
                                 }
@@ -1820,6 +1839,7 @@ fn preview_row<'a>(
     max_prefix_width: Option<f32>,
     is_hovered: bool,
     config: &'a Config,
+    registry: &'a dyn metadata::Registry,
     theme: &'a Theme,
 ) -> Element<'a, Message> {
     let content = match preview {
@@ -1985,32 +2005,24 @@ fn preview_row<'a>(
                 },
             );
 
-            let with_access_levels = config.buffer.nickname.show_access_levels;
-            let truncate = config.buffer.nickname.truncate;
+            let nick =
+                if let message::Source::User(user) = message.target.source() {
+                    let mut nick = selectable_text(
+                        " ".repeat(
+                            formatted_buffer_nickname(user, config, registry)
+                                .chars()
+                                .count(),
+                        ),
+                    );
 
-            let nick = if let message::Source::User(user) =
-                message.target.source()
-            {
-                let mut nick = selectable_text(
-                    " ".repeat(
-                        config
-                            .buffer
-                            .nickname
-                            .brackets
-                            .format(user.display(with_access_levels, truncate))
-                            .chars()
-                            .count(),
-                    ),
-                );
+                    if let Some(width) = right_aligned_width {
+                        nick = nick.width(width);
+                    }
 
-                if let Some(width) = right_aligned_width {
-                    nick = nick.width(width);
-                }
-
-                Some(nick)
-            } else {
-                None
-            };
+                    Some(nick)
+                } else {
+                    None
+                };
 
             let timestamp_nickname_row =
                 row![timestamp_gap, space, prefixes, nick];

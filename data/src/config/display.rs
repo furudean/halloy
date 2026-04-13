@@ -1,10 +1,13 @@
 use serde::Deserialize;
 
+pub mod nickname;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Display {
     pub direction_arrows: DirectionArrows,
     pub decode_urls: bool,
+    pub nickname: Vec<nickname::Metadata>,
 }
 
 impl Default for Display {
@@ -12,6 +15,7 @@ impl Default for Display {
         Self {
             direction_arrows: DirectionArrows::default(),
             decode_urls: true,
+            nickname: vec![nickname::Metadata::DisplayName],
         }
     }
 }
