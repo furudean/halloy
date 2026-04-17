@@ -128,6 +128,7 @@ pub enum Event {
         labeled_response_context: Option<LabeledResponseContext>,
     },
     Reaction(message::Encoded, Nick),
+    Redaction(message::Encoded, Nick),
     WithTarget {
         message: message::Encoded,
         our_nick: Nick,
@@ -1075,6 +1076,12 @@ impl Client {
             }
             _ if is_reaction(&message) => {
                 return Ok(vec![Event::Reaction(
+                    message,
+                    self.nickname().to_owned(),
+                )]);
+            }
+            _ if matches!(message.command, Command::REDACT(_, _, _)) => {
+                return Ok(vec![Event::Redaction(
                     message,
                     self.nickname().to_owned(),
                 )]);
@@ -3064,6 +3071,9 @@ impl Client {
                 _ if is_reaction(&message) => {
                     vec![Event::Reaction(message, self.nickname().to_owned())]
                 }
+                Command::REDACT(_, _, _) => {
+                    vec![Event::Redaction(message, self.nickname().to_owned())]
+                }
                 Command::NICK(new_nick) => {
                     let new_nick = Nick::from_str(new_nick, self.casemapping());
 
@@ -4266,6 +4276,15 @@ fn continue_chathistory_between(
                 ),
                 MessageReference::None => None,
             },
+            Event::Redaction(message, _) => match end_message_reference {
+                MessageReference::MessageId(_) => {
+                    message.message_id().map(MessageReference::MessageId)
+                }
+                MessageReference::Timestamp(_) => Some(
+                    MessageReference::Timestamp(message.server_time_or_now()),
+                ),
+                MessageReference::None => None,
+            },
             Event::Broadcast(_)
             | Event::FileTransferRequest(_)
             | Event::UpdateReadMarker(_, _)
@@ -4307,6 +4326,7 @@ fn continue_chathistory_targets(
             | Event::WithTarget { .. }
             | Event::DirectMessage(_, _, _)
             | Event::Reaction(_, _)
+            | Event::Redaction(_, _)
             | Event::Broadcast(_)
             | Event::FileTransferRequest(_)
             | Event::UpdateReadMarker(_, _)

@@ -18,7 +18,8 @@ use crate::reaction::{self, Reaction};
 use crate::target::{self, Target};
 use crate::user::Nick;
 use crate::{
-    Buffer, Message, Server, buffer, compression, config, environment, isupport,
+    Buffer, Message, Server, buffer, compression, config, environment,
+    isupport, redaction,
 };
 
 pub mod filter;
@@ -267,18 +268,29 @@ pub async fn append(
     read_marker: Option<ReadMarker>,
     chathistory_references: Option<MessageReferences>,
     pending_reactions: HashMap<message::Id, reaction::Pending>,
+    pending_redactions: HashMap<message::Id, redaction::Pending>,
 ) -> Result<(), Error> {
     let loaded = load(kind.clone(), seed).await?;
 
     let mut all_messages = loaded.messages;
+
     // pending reactions should only exist for unloaded history entries
     for (id, mut pending) in pending_reactions.into_iter() {
         if let Some(message) =
-            find_reaction_target(&mut all_messages, &id, &pending.server_time)
+            find_message_target(&mut all_messages, &id, &pending.server_time)
         {
             message.reactions.append(&mut pending.reactions);
         }
     }
+
+    for (id, pending) in pending_redactions.into_iter() {
+        if let Some(message) =
+            find_message_target(&mut all_messages, &id, &pending.server_time)
+        {
+            message.redacted = true;
+        }
+    }
+
     pending_messages.into_iter().for_each(
         |(message, labeled_response_context)| {
             insert_message(
@@ -349,6 +361,7 @@ pub enum History {
         chathistory_references: Option<MessageReferences>,
         last_seen: HashMap<Nick, DateTime<Utc>>,
         pending_reactions: HashMap<message::Id, reaction::Pending>,
+        pending_redactions: HashMap<message::Id, redaction::Pending>,
         show_in_sidebar: bool,
     },
     Full {
@@ -375,6 +388,7 @@ impl History {
             chathistory_references: None,
             last_seen: HashMap::new(),
             pending_reactions: HashMap::new(),
+            pending_redactions: HashMap::new(),
             show_in_sidebar: false,
         }
     }
@@ -668,6 +682,7 @@ impl History {
                 read_marker,
                 chathistory_references,
                 pending_reactions,
+                pending_redactions,
                 ..
             } => {
                 if let Some(last_received) = *last_updated_at
@@ -681,6 +696,7 @@ impl History {
                     let read_marker = *read_marker;
                     let chathistory_references = chathistory_references.clone();
                     let pending_reactions = std::mem::take(pending_reactions);
+                    let pending_redactions = std::mem::take(pending_redactions);
 
                     *last_updated_at = None;
 
@@ -693,6 +709,7 @@ impl History {
                                 read_marker,
                                 chathistory_references,
                                 pending_reactions,
+                                pending_redactions,
                             )
                             .await
                         }
@@ -785,6 +802,7 @@ impl History {
                         chathistory_references: chathistory_references.clone(),
                         last_seen,
                         pending_reactions: HashMap::new(),
+                        pending_redactions: HashMap::new(),
                         show_in_sidebar: true,
                     },
                 );
@@ -813,6 +831,7 @@ impl History {
                 read_marker,
                 chathistory_references,
                 pending_reactions,
+                pending_redactions,
                 ..
             } => {
                 append(
@@ -822,6 +841,7 @@ impl History {
                     read_marker,
                     chathistory_references,
                     pending_reactions,
+                    pending_redactions,
                 )
                 .await
             }
@@ -1085,11 +1105,57 @@ impl History {
                 ..
             } => {
                 let Some(message) =
-                    find_reaction_target(messages, &id, &server_time)
+                    find_message_target(messages, &id, &server_time)
                 else {
                     return;
                 };
                 message.reactions.push(reaction);
+
+                *last_updated_at = Some(Instant::now());
+            }
+        }
+    }
+
+    pub fn redact_message(
+        &mut self,
+        id: message::Id,
+        server_time: DateTime<Utc>,
+    ) {
+        match self {
+            History::Partial {
+                pending_messages,
+                last_updated_at,
+                pending_redactions,
+                ..
+            } => {
+                if let Some(message) =
+                    pending_messages.iter_mut().rev().find_map(|(m, _)| {
+                        (m.id.as_deref() == Some(&*id)).then_some(m)
+                    })
+                {
+                    message.redacted = true;
+                } else {
+                    let pending = pending_redactions
+                        .entry(id)
+                        .or_insert(redaction::Pending::new(server_time));
+
+                    pending.server_time =
+                        (pending.server_time).min(server_time);
+                }
+
+                *last_updated_at = Some(Instant::now());
+            }
+            History::Full {
+                messages,
+                last_updated_at,
+                ..
+            } => {
+                let Some(message) =
+                    find_message_target(messages, &id, &server_time)
+                else {
+                    return;
+                };
+                message.redacted = true;
 
                 *last_updated_at = Some(Instant::now());
             }
@@ -1336,7 +1402,7 @@ pub fn get_last_seen(messages: &[Message]) -> HashMap<Nick, DateTime<Utc>> {
     last_seen
 }
 
-pub fn find_reaction_target<'a>(
+pub fn find_message_target<'a>(
     messages: &'a mut [Message],
     id: &message::Id,
     server_time: &DateTime<Utc>,
