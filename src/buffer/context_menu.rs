@@ -904,6 +904,10 @@ pub fn has_user_metadata(
     registry: &dyn metadata::Registry,
     config: &Config,
 ) -> bool {
+    if !config.context_menu.show_user_metadata {
+        return false;
+    }
+
     let query = target::Query::from(user);
 
     config.metadata.preferred_keys.iter().copied().any(|key| {
