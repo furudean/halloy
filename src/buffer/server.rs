@@ -224,6 +224,7 @@ pub fn view<'a>(
                                     &state.server,
                                     prefix,
                                     None,
+                                    registry,
                                     user,
                                     None,
                                     None,

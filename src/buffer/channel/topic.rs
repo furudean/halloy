@@ -55,6 +55,7 @@ pub fn view<'a>(
     our_user: Option<&'a User>,
     config: &'a Config,
     theme: &'a Theme,
+    registry: &'a dyn data::metadata::Registry,
 ) -> Element<'a, Message> {
     let set_by = who.and_then(|user| {
         let user_in_channel = users.and_then(|users| users.resolve(user));
@@ -77,6 +78,7 @@ pub fn view<'a>(
             server,
             prefix,
             Some(channel),
+            registry,
             user,
             user_in_channel,
             our_user,
@@ -124,6 +126,7 @@ pub fn view<'a>(
                         user_in_channel,
                         our_user,
                         config.file_transfer.enabled,
+                        context_menu::has_user_metadata(user, registry, config),
                     )
                 }
                 message::Link::Url(_) =>
@@ -139,6 +142,7 @@ pub fn view<'a>(
                         server,
                         prefix,
                         channel: Some(channel),
+                        registry,
                         user,
                         current_user,
                     })

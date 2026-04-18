@@ -98,6 +98,7 @@ pub fn view<'a>(
         chantypes,
         casemapping,
         prefix,
+        registry: clients.get_registry(server),
         confirm_message_delivery,
         can_send_reactions,
         our_nick,

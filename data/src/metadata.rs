@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::str::FromStr;
 
 use iced::Color;
@@ -30,6 +31,21 @@ impl Key {
             Key::Pronouns => "pronouns",
             Key::Status => "status",
         }
+    }
+}
+
+impl fmt::Display for Key {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Key::Avatar => "Avatar",
+            Key::Color => "Color",
+            Key::DisplayName => "Display name",
+            Key::Homepage => "Homepage",
+            Key::Pronouns => "Pronouns",
+            Key::Status => "Status",
+        };
+
+        f.write_str(label)
     }
 }
 use Key::*;

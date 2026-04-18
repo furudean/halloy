@@ -112,6 +112,7 @@ pub fn view<'a>(
         chantypes,
         casemapping,
         prefix,
+        registry: clients.get_registry(server),
         confirm_message_delivery,
         can_send_reactions,
         our_nick,
@@ -158,7 +159,14 @@ pub fn view<'a>(
     .height(Length::Fill);
 
     let nick_list = nick_list::view(
-        server, prefix, channel, users, our_user, config, theme,
+        server,
+        prefix,
+        channel,
+        clients.get_registry(server),
+        users,
+        our_user,
+        config,
+        theme,
     )
     .map(Message::ContextMenu);
 
@@ -552,6 +560,7 @@ fn topic<'a>(
             our_user,
             config,
             theme,
+            clients.get_registry(&state.server),
         )
         .map(Message::Topic),
     )
@@ -560,7 +569,7 @@ fn topic<'a>(
 mod nick_list {
     use context_menu::Message;
     use data::user::ChannelUsers;
-    use data::{Config, Server, User, config, isupport, target};
+    use data::{Config, Server, User, config, isupport, metadata, target};
     use iced::Length;
     use iced::advanced::text;
     use iced::widget::{Scrollable, column, scrollable};
@@ -573,6 +582,7 @@ mod nick_list {
         server: &'a Server,
         prefix: &'a [isupport::PrefixMap],
         channel: &'a target::Channel,
+        registry: &'a dyn metadata::Registry,
         users: Option<&'a ChannelUsers>,
         our_user: Option<&'a User>,
         config: &'a Config,
@@ -623,6 +633,7 @@ mod nick_list {
                 server,
                 prefix,
                 Some(channel),
+                registry,
                 user,
                 Some(user),
                 our_user,

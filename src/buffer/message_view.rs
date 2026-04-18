@@ -85,6 +85,7 @@ pub struct ChannelQueryLayout<'a> {
     pub chantypes: &'a [char],
     pub casemapping: CaseMap,
     pub prefix: &'a [PrefixMap],
+    pub registry: &'a dyn metadata::Registry,
     pub confirm_message_delivery: bool,
     pub can_send_reactions: bool,
     pub our_nick: Option<NickRef<'a>>,
@@ -459,6 +460,7 @@ impl<'a> ChannelQueryLayout<'a> {
                         nick_text,
                         self.server,
                         self.prefix,
+                        self.registry,
                         user,
                         self.config,
                         self.theme,
@@ -471,6 +473,7 @@ impl<'a> ChannelQueryLayout<'a> {
                         self.server,
                         self.prefix,
                         self.target.channel(),
+                        self.registry,
                         user,
                         user_in_channel,
                         self.target.our_user(),
@@ -530,6 +533,11 @@ impl<'a> ChannelQueryLayout<'a> {
                             user_in_channel,
                             formatter.target.our_user(),
                             formatter.config.file_transfer.enabled,
+                            context_menu::has_user_metadata(
+                                user,
+                                formatter.registry,
+                                formatter.config,
+                            ),
                         )
                     }
                 }
@@ -642,6 +650,11 @@ impl<'a> ChannelQueryLayout<'a> {
                         user_in_channel,
                         formatter.target.our_user(),
                         formatter.config.file_transfer.enabled,
+                        context_menu::has_user_metadata(
+                            user,
+                            formatter.registry,
+                            formatter.config,
+                        ),
                     )
                 }
                 message::Link::Url(_) => formatter.url_entries(message, link),
@@ -769,6 +782,11 @@ impl<'a> ChannelQueryLayout<'a> {
                         user_in_channel,
                         formatter.target.our_user(),
                         formatter.config.file_transfer.enabled,
+                        context_menu::has_user_metadata(
+                            user,
+                            formatter.registry,
+                            formatter.config,
+                        ),
                     )
                 }
                 message::Link::Url(_) => formatter.url_entries(message, link),
@@ -823,6 +841,7 @@ impl<'a> ChannelQueryLayout<'a> {
                 server: self.server,
                 prefix: self.prefix,
                 channel: self.target.channel(),
+                registry: self.registry,
                 user,
                 current_user,
             })
@@ -934,6 +953,11 @@ impl<'a> LayoutMessage<'a> for ChannelQueryLayout<'a> {
                                 user_in_channel,
                                 formatter.target.our_user(),
                                 formatter.config.file_transfer.enabled,
+                                context_menu::has_user_metadata(
+                                    user,
+                                    formatter.registry,
+                                    formatter.config,
+                                ),
                             )
                         }
                         message::Link::Url(_) => {

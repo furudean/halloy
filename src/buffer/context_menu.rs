@@ -3,7 +3,9 @@ use std::string::ToString;
 use chrono::{DateTime, Utc};
 use data::dashboard::BufferAction;
 use data::user::Nick;
-use data::{Config, Server, User, config, ctcp, isupport, message, target};
+use data::{
+    Config, Server, User, config, ctcp, isupport, message, metadata, target,
+};
 use iced::widget::{Space, button, column, container, row, rule};
 use iced::{Length, Padding, mouse};
 
@@ -15,6 +17,7 @@ pub enum Context<'a> {
         server: &'a Server,
         prefix: &'a [isupport::PrefixMap],
         channel: Option<&'a target::Channel>,
+        registry: &'a dyn metadata::Registry,
         user: &'a User,
         current_user: Option<&'a User>,
     },
@@ -43,6 +46,7 @@ pub enum Entry {
     ToggleAccessLevelVoice,
     SendFile,
     UserInfo,
+    UserMetadata,
     HorizontalRule,
     CtcpRequestTime,
     CtcpRequestVersion,
@@ -110,19 +114,29 @@ impl Entry {
         user_in_channel: Option<&User>,
         our_user: Option<&User>,
         file_transfer_enabled: bool,
+        has_metadata: bool,
     ) -> Vec<Self> {
+        let mut user_info_entries = vec![Entry::UserInfo];
+
+        if has_metadata {
+            user_info_entries.push(Entry::HorizontalRule);
+            user_info_entries.push(Entry::UserMetadata);
+        }
+
         if is_channel {
             if user_in_channel.is_none() {
-                vec![Entry::UserInfo, Entry::HorizontalRule, Entry::Whowas]
+                let mut list = user_info_entries;
+                list.extend([Entry::HorizontalRule, Entry::Whowas]);
+                list
             } else if our_user.is_some_and(|u| {
                 u.has_access_level(data::user::AccessLevel::Oper)
             }) {
-                let mut list = vec![
-                    Entry::UserInfo,
+                let mut list = user_info_entries;
+                list.extend([
                     Entry::HorizontalRule,
                     Entry::Whois,
                     Entry::Query,
-                ];
+                ]);
 
                 if file_transfer_enabled {
                     list.push(Entry::SendFile);
@@ -139,12 +153,12 @@ impl Entry {
 
                 list
             } else {
-                let mut list = vec![
-                    Entry::UserInfo,
+                let mut list = user_info_entries;
+                list.extend([
                     Entry::HorizontalRule,
                     Entry::Whois,
                     Entry::Query,
-                ];
+                ]);
 
                 if file_transfer_enabled {
                     list.push(Entry::SendFile);
@@ -323,6 +337,9 @@ impl Entry {
                 config,
                 theme,
             ),
+            (Entry::UserMetadata, Context::User { user, registry, .. }) => {
+                user_metadata(user, registry, config, theme, length)
+            }
             (Entry::HorizontalRule, _) => match length {
                 Length::Fill => {
                     container(rule::horizontal(1)).padding([0, 6]).into()
@@ -628,6 +645,7 @@ pub fn user<'a>(
     server: &'a Server,
     prefix: &'a [isupport::PrefixMap],
     channel: Option<&'a target::Channel>,
+    registry: &'a dyn metadata::Registry,
     user: &'a User,
     current_user: Option<&'a User>,
     our_user: Option<&'a User>,
@@ -640,6 +658,7 @@ pub fn user<'a>(
         current_user,
         our_user,
         config.file_transfer.enabled,
+        has_user_metadata(user, registry, config),
     );
 
     user_with_entries(
@@ -647,6 +666,7 @@ pub fn user<'a>(
         server,
         prefix,
         channel,
+        registry,
         user,
         current_user,
         config,
@@ -660,6 +680,7 @@ pub fn rerouted_private_user<'a>(
     content: impl Into<Element<'a, Message>>,
     server: &'a Server,
     prefix: &'a [isupport::PrefixMap],
+    registry: &'a dyn metadata::Registry,
     user: &'a User,
     config: &'a Config,
     theme: &'a Theme,
@@ -670,6 +691,7 @@ pub fn rerouted_private_user<'a>(
         server,
         prefix,
         None,
+        registry,
         user,
         None,
         config,
@@ -684,6 +706,7 @@ fn user_with_entries<'a>(
     server: &'a Server,
     prefix: &'a [isupport::PrefixMap],
     channel: Option<&'a target::Channel>,
+    registry: &'a dyn metadata::Registry,
     user: &'a User,
     current_user: Option<&'a User>,
     config: &'a Config,
@@ -717,6 +740,7 @@ fn user_with_entries<'a>(
                     server,
                     prefix,
                     channel,
+                    registry,
                     user,
                     current_user,
                 }),
@@ -873,4 +897,51 @@ fn user_info<'a>(
             .padding(right_justified_padding(config))
     ]
     .into()
+}
+
+pub fn has_user_metadata(
+    user: &User,
+    registry: &dyn metadata::Registry,
+    config: &Config,
+) -> bool {
+    let query = target::Query::from(user);
+
+    config.metadata.preferred_keys.iter().copied().any(|key| {
+        registry
+            .get_user(&query, key)
+            .is_some_and(|value| !value.is_empty())
+    })
+}
+
+fn user_metadata<'a>(
+    user: &User,
+    registry: &dyn metadata::Registry,
+    config: &Config,
+    theme: &Theme,
+    length: Length,
+) -> Element<'a, Message> {
+    let query = target::Query::from(user);
+    let rows = config
+        .metadata
+        .preferred_keys
+        .iter()
+        .copied()
+        .filter_map(|key| {
+            registry
+                .get_user(&query, key)
+                .filter(|value| !value.is_empty())
+                .map(|value| (key, value))
+        })
+        .map(|(key, value)| {
+            text(format!("{value} ({key})"))
+                .style(theme::text::secondary)
+                .font_maybe(theme::font_style::secondary(theme).map(font::get))
+                .width(length)
+                .into()
+        });
+
+    column(rows)
+        .spacing(2)
+        .padding(right_justified_padding(config))
+        .into()
 }

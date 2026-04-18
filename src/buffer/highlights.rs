@@ -150,6 +150,7 @@ pub fn view<'a>(
                             server,
                             prefix,
                             Some(channel),
+                            clients.get_registry(server),
                             user,
                             current_user,
                             None,
@@ -181,6 +182,11 @@ pub fn view<'a>(
                                     current_user,
                                     None,
                                     config.file_transfer.enabled,
+                                    context_menu::has_user_metadata(
+                                        user,
+                                        clients.get_registry(server),
+                                        config,
+                                    ),
                                 )
                             }
                             message::Link::Url(_) => {
@@ -194,6 +200,7 @@ pub fn view<'a>(
                                     server,
                                     prefix,
                                     channel: Some(channel),
+                                    registry: clients.get_registry(server),
                                     user,
                                     current_user,
                                 })
