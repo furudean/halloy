@@ -3258,7 +3258,7 @@ impl Dashboard {
     pub fn redact_message(
         &mut self,
         server: &Server,
-        redaction: redaction::Redaction,
+        redaction: redaction::Context,
     ) {
         self.history.redact_message(server, redaction);
     }

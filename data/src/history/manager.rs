@@ -15,11 +15,10 @@ use crate::history::{self, History, MessageReferences, ReadMarker, metadata};
 use crate::message::broadcast::{self, Broadcast};
 use crate::message::{self, Limit};
 use crate::reaction::{self, Reaction};
+use crate::redaction::{self, Redaction};
 use crate::target::{self, Target};
 use crate::user::Nick;
-use crate::{
-    Config, Server, buffer, client, config, input, isupport, redaction, server,
-};
+use crate::{Config, Server, buffer, client, config, input, isupport, server};
 
 const DRAFT_SAVE_EVERY: Duration = Duration::from_secs(10);
 
@@ -461,14 +460,18 @@ impl Manager {
     pub fn redact_message(
         &mut self,
         server: &Server,
-        redaction: redaction::Redaction,
+        redaction: redaction::Context,
     ) -> Option<impl Future<Output = Message> + use<>> {
         let kind = history::Kind::from_target(
             server.clone(),
             redaction.target.clone(),
         );
-        self.data
-            .redact_message(kind, redaction.id, redaction.server_time)
+        self.data.redact_message(
+            kind,
+            redaction.id,
+            redaction.inner,
+            redaction.server_time,
+        )
     }
 
     pub fn block_and_record_message(
@@ -1298,7 +1301,7 @@ impl Data {
                             id,
                             &pending.server_time,
                         ) {
-                            message.redacted = true;
+                            message.redaction = Some(pending.redaction.clone());
                         }
                     }
 
@@ -1892,18 +1895,21 @@ impl Data {
         &mut self,
         kind: history::Kind,
         id: message::Id,
+        redaction: Redaction,
         server_time: DateTime<Utc>,
     ) -> Option<impl Future<Output = Message> + use<>> {
         match self.map.entry(kind.clone()) {
             hash_map::Entry::Occupied(mut entry) => {
-                entry.get_mut().redact_message(id, server_time);
+                entry.get_mut().redact_message(id, redaction, server_time);
 
                 None
             }
             hash_map::Entry::Vacant(entry) => {
-                entry
-                    .insert(History::partial(kind.clone()))
-                    .redact_message(id, server_time);
+                entry.insert(History::partial(kind.clone())).redact_message(
+                    id,
+                    redaction,
+                    server_time,
+                );
 
                 Some(
                     async move {
