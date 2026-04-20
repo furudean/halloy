@@ -975,6 +975,7 @@ fn user_metadata<'a>(
     length: Length,
 ) -> Element<'a, Message> {
     let query = target::Query::from(user);
+    let show_avatar = avatar.is_some();
     let avatar: Option<Element<'a, Message>> = avatar.map(|avatar| {
         let content: Element<'a, Message> = match avatar {
             UserAvatar::Loaded(path) => image(path.clone())
@@ -999,6 +1000,7 @@ fn user_metadata<'a>(
         .preferred_keys
         .iter()
         .copied()
+        .filter(|key| !(show_avatar && matches!(key, metadata::Key::Avatar)))
         .filter_map(|key| {
             registry
                 .get_user(&query, key)
