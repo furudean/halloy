@@ -92,7 +92,7 @@ pub struct ChannelQueryLayout<'a> {
     pub connected: bool,
     pub server: &'a Server,
     pub theme: &'a Theme,
-    pub previews: Option<Previews<'a>>,
+    pub previews: Previews<'a>,
     pub target: TargetInfo<'a>,
 }
 
@@ -112,7 +112,7 @@ impl<'a> ChannelQueryLayout<'a> {
         // for this URL in current context.
         let is_loaded = self
             .previews
-            .and_then(|previews| previews.get(&parsed))
+            .get(&parsed)
             .is_some_and(|state| matches!(state, preview::State::Loaded(_)));
         if !is_loaded {
             return None;
@@ -461,6 +461,7 @@ impl<'a> ChannelQueryLayout<'a> {
                         self.server,
                         self.prefix,
                         self.registry,
+                        self.previews.collection(),
                         user,
                         self.config,
                         self.theme,
@@ -474,6 +475,7 @@ impl<'a> ChannelQueryLayout<'a> {
                         self.prefix,
                         self.target.channel(),
                         self.registry,
+                        self.previews.collection(),
                         user,
                         user_in_channel,
                         self.target.our_user(),
@@ -842,6 +844,11 @@ impl<'a> ChannelQueryLayout<'a> {
                 prefix: self.prefix,
                 channel: self.target.channel(),
                 registry: self.registry,
+                avatar: context_menu::user_avatar(
+                    user,
+                    self.registry,
+                    self.previews.collection(),
+                ),
                 user,
                 current_user,
             })

@@ -99,13 +99,13 @@ pub fn view<'a>(
     let chathistory_state =
         clients.get_chathistory_state(server, &channel.to_target());
 
-    let previews = Some(Previews::new(
+    let previews = Previews::new(
         previews,
         channel.as_target_ref(),
         server,
         &config.preview,
         casemapping,
-    ));
+    );
 
     let message_formatter = ChannelQueryLayout {
         config,
@@ -132,7 +132,7 @@ pub fn view<'a>(
             &state.scroll_view,
             scroll_view::Kind::Channel(&state.server, channel),
             history,
-            previews,
+            Some(previews),
             Some(|preview: &Preview, source: &message::Source| {
                 preview.visible_for_source(
                     source,
@@ -163,6 +163,7 @@ pub fn view<'a>(
         prefix,
         channel,
         clients.get_registry(server),
+        previews.collection(),
         users,
         our_user,
         config,
@@ -172,8 +173,17 @@ pub fn view<'a>(
 
     // If topic toggles from None to Some then it messes with messages' scroll state,
     // so produce a zero-height placeholder when topic is None.
-    let topic = topic(state, clients, users, our_user, settings, config, theme)
-        .unwrap_or_else(|| column![].into());
+    let topic = topic(
+        state,
+        clients,
+        users,
+        our_user,
+        settings,
+        config,
+        theme,
+        previews.collection(),
+    )
+    .unwrap_or_else(|| column![].into());
 
     let show_text_input = match config.buffer.text_input.visibility {
         data::config::buffer::text_input::Visibility::Focused => is_focused,
@@ -529,6 +539,7 @@ fn topic<'a>(
     settings: Option<&'a buffer::Settings>,
     config: &'a Config,
     theme: &'a Theme,
+    previews: &'a preview::Collection,
 ) -> Option<Element<'a, Message>> {
     let topic_enabled = settings
         .map_or(config.buffer.channel.topic_banner.enabled, |settings| {
@@ -561,6 +572,7 @@ fn topic<'a>(
             config,
             theme,
             clients.get_registry(&state.server),
+            previews,
         )
         .map(Message::Topic),
     )
@@ -583,6 +595,7 @@ mod nick_list {
         prefix: &'a [isupport::PrefixMap],
         channel: &'a target::Channel,
         registry: &'a dyn metadata::Registry,
+        previews: &'a data::preview::Collection,
         users: Option<&'a ChannelUsers>,
         our_user: Option<&'a User>,
         config: &'a Config,
@@ -634,6 +647,7 @@ mod nick_list {
                 prefix,
                 Some(channel),
                 registry,
+                previews,
                 user,
                 Some(user),
                 our_user,

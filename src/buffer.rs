@@ -583,10 +583,10 @@ impl Buffer {
                 is_focused,
             )
             .map(Message::Channel),
-            Buffer::Server(state) => {
-                server::view(state, clients, history, config, theme, is_focused)
-                    .map(Message::Server)
-            }
+            Buffer::Server(state) => server::view(
+                state, clients, history, previews, config, theme, is_focused,
+            )
+            .map(Message::Server),
             Buffer::Query(state) => query::view(
                 state, clients, history, previews, config, theme, is_focused,
             )
@@ -598,10 +598,10 @@ impl Buffer {
             Buffer::Logs(state) => {
                 logs::view(state, history, config, theme).map(Message::Logs)
             }
-            Buffer::Highlights(state) => {
-                highlights::view(state, clients, history, config, theme)
-                    .map(Message::Highlights)
-            }
+            Buffer::Highlights(state) => highlights::view(
+                state, clients, history, previews, config, theme,
+            )
+            .map(Message::Highlights),
             Buffer::ChannelDiscovery(state) => {
                 channel_discovery::view(state, clients, config, theme)
                     .map(Message::ChannelList)

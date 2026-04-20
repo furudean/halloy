@@ -4,10 +4,11 @@ use chrono::{DateTime, Utc};
 use data::dashboard::BufferAction;
 use data::user::Nick;
 use data::{
-    Config, Server, User, config, ctcp, isupport, message, metadata, target,
+    Config, Server, User, config, ctcp, isupport, message, metadata, preview,
+    target,
 };
-use iced::widget::{Space, button, column, container, row, rule};
-use iced::{Length, Padding, mouse};
+use iced::widget::{Space, button, column, container, image, row, rule};
+use iced::{ContentFit, Length, Padding, mouse};
 
 use crate::widget::{Element, context_menu, double_pass, text};
 use crate::{Theme, font, theme, widget};
@@ -18,6 +19,7 @@ pub enum Context<'a> {
         prefix: &'a [isupport::PrefixMap],
         channel: Option<&'a target::Channel>,
         registry: &'a dyn metadata::Registry,
+        avatar: Option<UserAvatar>,
         user: &'a User,
         current_user: Option<&'a User>,
     },
@@ -63,6 +65,12 @@ pub enum Entry {
     // message context
     CopyMessage,
     AddReaction,
+}
+
+#[derive(Debug, Clone)]
+pub enum UserAvatar {
+    Pending,
+    Loaded(std::path::PathBuf),
 }
 
 impl Entry {
@@ -337,9 +345,22 @@ impl Entry {
                 config,
                 theme,
             ),
-            (Entry::UserMetadata, Context::User { user, registry, .. }) => {
-                user_metadata(user, registry, config, theme, length)
-            }
+            (
+                Entry::UserMetadata,
+                Context::User {
+                    user,
+                    registry,
+                    avatar,
+                    ..
+                },
+            ) => user_metadata(
+                user,
+                registry,
+                avatar.as_ref(),
+                config,
+                theme,
+                length,
+            ),
             (Entry::HorizontalRule, _) => match length {
                 Length::Fill => {
                     container(rule::horizontal(1)).padding([0, 6]).into()
@@ -540,6 +561,7 @@ pub enum Message {
     #[allow(clippy::enum_variant_names)]
     ResendMessage(DateTime<Utc>, message::Hash),
     OpenReactionModal(message::Id, Vec<String>),
+    LoadUserAvatar(Server, url::Url),
 }
 
 #[derive(Debug, Clone)]
@@ -561,6 +583,7 @@ pub enum Event {
     DeleteMessage(DateTime<Utc>, message::Hash),
     ResendMessage(DateTime<Utc>, message::Hash),
     OpenReactionModal(message::Id, Vec<String>),
+    LoadUserAvatar(Server, url::Url),
 }
 
 pub fn update(message: Message) -> Event {
@@ -592,6 +615,9 @@ pub fn update(message: Message) -> Event {
         }
         Message::OpenReactionModal(msgid, selected_reactions) => {
             Event::OpenReactionModal(msgid, selected_reactions)
+        }
+        Message::LoadUserAvatar(server, url) => {
+            Event::LoadUserAvatar(server, url)
         }
     }
 }
@@ -646,6 +672,7 @@ pub fn user<'a>(
     prefix: &'a [isupport::PrefixMap],
     channel: Option<&'a target::Channel>,
     registry: &'a dyn metadata::Registry,
+    previews: &'a preview::Collection,
     user: &'a User,
     current_user: Option<&'a User>,
     our_user: Option<&'a User>,
@@ -667,6 +694,7 @@ pub fn user<'a>(
         prefix,
         channel,
         registry,
+        previews,
         user,
         current_user,
         config,
@@ -681,6 +709,7 @@ pub fn rerouted_private_user<'a>(
     server: &'a Server,
     prefix: &'a [isupport::PrefixMap],
     registry: &'a dyn metadata::Registry,
+    previews: &'a preview::Collection,
     user: &'a User,
     config: &'a Config,
     theme: &'a Theme,
@@ -692,6 +721,7 @@ pub fn rerouted_private_user<'a>(
         prefix,
         None,
         registry,
+        previews,
         user,
         None,
         config,
@@ -707,6 +737,7 @@ fn user_with_entries<'a>(
     prefix: &'a [isupport::PrefixMap],
     channel: Option<&'a target::Channel>,
     registry: &'a dyn metadata::Registry,
+    previews: &'a preview::Collection,
     user: &'a User,
     current_user: Option<&'a User>,
     config: &'a Config,
@@ -726,8 +757,20 @@ fn user_with_entries<'a>(
     };
 
     let base = widget::button::transparent_button(content, message);
+    let avatar = user_avatar(user, registry, previews);
+    let on_open = config
+        .context_menu
+        .show_user_metadata
+        .then(|| avatar_url(user, registry))
+        .flatten()
+        .filter(|url| !previews.contains_key(url))
+        .map(|url| {
+            let server = server.clone();
 
-    context_menu(
+            move || Message::LoadUserAvatar(server.clone(), url.clone())
+        });
+
+    let menu = context_menu(
         context_menu::MouseButton::default(),
         context_menu::Anchor::Cursor,
         context_menu::ToggleBehavior::KeepOpen,
@@ -741,6 +784,7 @@ fn user_with_entries<'a>(
                     prefix,
                     channel,
                     registry,
+                    avatar: avatar.clone(),
                     user,
                     current_user,
                 }),
@@ -749,8 +793,13 @@ fn user_with_entries<'a>(
                 theme,
             )
         },
-    )
-    .into()
+    );
+
+    if let Some(on_open) = on_open {
+        menu.on_open(on_open).into()
+    } else {
+        menu.into()
+    }
 }
 
 pub fn timestamp<'a>(
@@ -920,11 +969,31 @@ pub fn has_user_metadata(
 fn user_metadata<'a>(
     user: &User,
     registry: &dyn metadata::Registry,
+    avatar: Option<&UserAvatar>,
     config: &Config,
-    theme: &Theme,
+    theme: &'a Theme,
     length: Length,
 ) -> Element<'a, Message> {
     let query = target::Query::from(user);
+    let avatar: Option<Element<'a, Message>> = avatar.map(|avatar| {
+        let content: Element<'a, Message> = match avatar {
+            UserAvatar::Loaded(path) => image(path.clone())
+                .width(28)
+                .height(28)
+                .border_radius(4)
+                .content_fit(ContentFit::Cover)
+                .into(),
+            UserAvatar::Pending => Space::new()
+                .width(Length::Fixed(28.0))
+                .height(Length::Fixed(28.0))
+                .into(),
+        };
+
+        container(content)
+            .width(Length::Fixed(28.0))
+            .height(Length::Fixed(28.0))
+            .into()
+    });
     let rows = config
         .metadata
         .preferred_keys
@@ -944,8 +1013,37 @@ fn user_metadata<'a>(
                 .into()
         });
 
-    column(rows)
+    let mut content = column![];
+
+    if let Some(avatar) = avatar {
+        content = content.push(avatar);
+    }
+
+    content
+        .push(column(rows).spacing(2))
         .spacing(2)
         .padding(right_justified_padding(config))
         .into()
+}
+
+fn avatar_url(
+    user: &User,
+    registry: &dyn metadata::Registry,
+) -> Option<url::Url> {
+    let query = target::Query::from(user);
+    let avatar = registry.avatar(target::TargetRef::Query(&query))?;
+    url::Url::parse(avatar).ok()
+}
+
+pub fn user_avatar(
+    user: &User,
+    registry: &dyn metadata::Registry,
+    previews: &preview::Collection,
+) -> Option<UserAvatar> {
+    avatar_url(user, registry).map(|url| match previews.get(&url) {
+        Some(preview::State::Loaded(preview)) => {
+            UserAvatar::Loaded(preview.image().path.clone())
+        }
+        _ => UserAvatar::Pending,
+    })
 }

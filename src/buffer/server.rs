@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use data::dashboard::BufferAction;
 use data::target::Target;
 use data::user::Nick;
-use data::{Config, Preview, User, buffer, history, message};
+use data::{Config, Preview, User, buffer, history, message, preview};
 use iced::advanced::text;
 use iced::widget::{Space, column, container, row, space};
 use iced::{Color, Length, Size, Task, padding};
@@ -74,6 +74,7 @@ pub fn view<'a>(
     state: &'a Server,
     clients: &'a data::client::Map,
     history: &'a history::Manager,
+    previews: &'a preview::Collection,
     config: &'a Config,
     theme: &'a Theme,
     is_focused: bool,
@@ -225,6 +226,7 @@ pub fn view<'a>(
                                     prefix,
                                     None,
                                     registry,
+                                    previews,
                                     user,
                                     None,
                                     None,

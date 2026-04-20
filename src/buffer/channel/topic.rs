@@ -56,6 +56,7 @@ pub fn view<'a>(
     config: &'a Config,
     theme: &'a Theme,
     registry: &'a dyn data::metadata::Registry,
+    previews: &'a data::preview::Collection,
 ) -> Element<'a, Message> {
     let set_by = who.and_then(|user| {
         let user_in_channel = users.and_then(|users| users.resolve(user));
@@ -79,6 +80,7 @@ pub fn view<'a>(
             prefix,
             Some(channel),
             registry,
+            previews,
             user,
             user_in_channel,
             our_user,
@@ -143,6 +145,9 @@ pub fn view<'a>(
                         prefix,
                         channel: Some(channel),
                         registry,
+                        avatar: context_menu::user_avatar(
+                            user, registry, previews,
+                        ),
                         user,
                         current_user,
                     })

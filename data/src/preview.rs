@@ -79,6 +79,10 @@ impl<'a> Previews<'a> {
             State::Error(_) => true,
         })
     }
+
+    pub fn collection(&self) -> &'a Collection {
+        self.collection
+    }
 }
 
 pub type Collection = HashMap<Url, State>;

@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use data::config::buffer::nickname::ShownStatus;
 use data::dashboard::BufferAction;
 use data::target::{self, Target};
-use data::{Config, Preview, Server, history, message, metadata};
+use data::{Config, Preview, Server, history, message, metadata, preview};
 use iced::widget::{container, row, span};
 use iced::{Color, Length, Size, Task};
 
@@ -36,6 +36,7 @@ pub fn view<'a>(
     state: &'a Highlights,
     clients: &'a data::client::Map,
     history: &'a history::Manager,
+    previews: &'a preview::Collection,
     config: &'a Config,
     theme: &'a Theme,
 ) -> Element<'a, Message> {
@@ -151,6 +152,7 @@ pub fn view<'a>(
                             prefix,
                             Some(channel),
                             clients.get_registry(server),
+                            previews,
                             user,
                             current_user,
                             None,
@@ -201,6 +203,11 @@ pub fn view<'a>(
                                     prefix,
                                     channel: Some(channel),
                                     registry: clients.get_registry(server),
+                                    avatar: context_menu::user_avatar(
+                                        user,
+                                        clients.get_registry(server),
+                                        previews,
+                                    ),
                                     user,
                                     current_user,
                                 })
