@@ -2081,9 +2081,10 @@ impl Dashboard {
                             self.previews
                                 .insert(url.clone(), preview::State::Loading);
                             tasks.push(Task::perform(
-                                data::preview::load(
+                                data::preview::load_avatar(
                                     url.clone(),
                                     client,
+                                    config.metadata.avatar.clone(),
                                     config.preview.clone(),
                                 ),
                                 move |result| {
