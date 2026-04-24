@@ -2574,6 +2574,9 @@ impl Dashboard {
                     return (task, None);
                 };
 
+                let override_url = clients
+                    .get_filehost_override_url(&server)
+                    .map(String::from);
                 let pending = filehost::PendingUpload {
                     window,
                     pane_id: id,
@@ -2583,6 +2586,7 @@ impl Dashboard {
                     server,
                     target,
                     upload_url,
+                    override_url,
                     file_paths,
                     upload_ids,
                     abort_registrations,

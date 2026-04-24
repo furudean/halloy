@@ -35,6 +35,7 @@ pub struct PendingUpload {
     pub server: data::Server,
     pub target: Option<Target>,
     pub upload_url: String,
+    pub override_url: Option<String>,
     pub has_credentials: bool,
     pub file_paths: Vec<PathBuf>,
     pub upload_ids: Vec<u32>,
@@ -210,6 +211,7 @@ fn start_tasks(
         server,
         target,
         upload_url,
+        override_url,
         has_credentials: _,
         file_paths,
         upload_ids,
@@ -222,6 +224,7 @@ fn start_tasks(
         .zip(abort_registrations)
         .map(|((file_path, id), registration)| {
             let upload_url = upload_url.clone();
+            let override_url = override_url.clone();
             let auth = clients.get_filehost_auth(&server);
             let http_client = http_client.clone();
             let server = server.clone();
@@ -237,6 +240,7 @@ fn start_tasks(
                         irc_uses_tls,
                         http_client,
                         proxy_config.as_ref(),
+                        override_url.as_deref(),
                     );
                     futures::future::Abortable::new(fut, registration).await
                 },

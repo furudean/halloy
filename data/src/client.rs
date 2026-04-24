@@ -4619,6 +4619,19 @@ impl Map {
         )
     }
 
+    pub fn get_filehost_override_url<'a>(
+        &'a self,
+        server: &Server,
+    ) -> Option<&'a str> {
+        let client = self.client(server)?;
+
+        if !client.config.filehost.enabled {
+            return None;
+        }
+
+        client.config.filehost.override_url.as_deref()
+    }
+
     pub fn get_filehost_auth(
         &self,
         server: &Server,

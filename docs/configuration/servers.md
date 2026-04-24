@@ -764,6 +764,8 @@ enabled = true
 
 Override the filehost URL advertised by the server via ISUPPORT. The filehost must be compatible with the `soju.im/filehost` spec.
 
+When this is set to a loopback URL, mixed-content uploads are permitted. This is useful if you have a local upload service on the same machine.
+
 ```toml
 # Type: string
 # Values: any string

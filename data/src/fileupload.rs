@@ -7,7 +7,7 @@ use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::{Client, header};
 use tokio::io::AsyncReadExt as _;
 use tokio_util::io::ReaderStream;
-use url::Url;
+use url::{Host, Url};
 
 use crate::config::server::Sasl;
 use crate::config::{self, proxy};
@@ -69,6 +69,15 @@ impl TryFrom<&Sasl> for Auth {
     }
 }
 
+fn is_localhost(url: &Url) -> bool {
+    match url.host() {
+        Some(Host::Domain("localhost")) => true,
+        Some(Host::Ipv4(addr)) => addr.is_loopback(),
+        Some(Host::Ipv6(addr)) => addr.is_loopback(),
+        _ => false,
+    }
+}
+
 /// Upload the file at `path` to `upload_url`.
 ///
 /// Returns the public URL of the uploaded file as reported by the server's
@@ -80,6 +89,7 @@ pub async fn upload(
     irc_uses_tls: bool,
     client: Arc<Client>,
     proxy_config: Option<&proxy::Proxy>,
+    override_url: Option<&str>,
 ) -> Result<String, Error> {
     let base =
         Url::parse(upload_url).map_err(|e| Error::InvalidUri(e.to_string()))?;
@@ -93,7 +103,12 @@ pub async fn upload(
     }
 
     // Spec: clients MUST refuse unencrypted transports when IRC uses TLS.
-    if irc_uses_tls && base.scheme() != "https" {
+    // However, we allow localhost for override_url
+    let is_override_url = override_url.is_some_and(|u| u == upload_url);
+    if irc_uses_tls
+        && base.scheme() != "https"
+        && !(is_override_url && is_localhost(&base))
+    {
         return Err(Error::InsecureTransport);
     }
 
