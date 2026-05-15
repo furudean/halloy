@@ -173,6 +173,7 @@ pub enum Event {
     BouncerNetwork(Server, config::Server),
     AddToSidebar(target::Query),
     Disconnect(Option<String>),
+    UpdateIcon,
 }
 
 struct ChatHistoryRequest {
@@ -429,7 +430,7 @@ impl Client {
             }
         }
 
-        let events = config
+        let mut events = config
             .queries
             .iter()
             .filter_map(|query| {
@@ -481,6 +482,10 @@ impl Client {
                     c2.as_normalized_str(),
                 )
             });
+        }
+
+        if self.config.icon != config.icon {
+            events.push(Event::UpdateIcon);
         }
 
         self.config = config;
@@ -4599,7 +4604,8 @@ fn continue_chathistory_between(
             | Event::OnConnect(_)
             | Event::BouncerNetwork(_, _)
             | Event::AddToSidebar(_)
-            | Event::Disconnect(_) => None,
+            | Event::Disconnect(_)
+            | Event::UpdateIcon => None,
         });
 
     start_message_reference.map(|start_message_reference| {
@@ -4647,7 +4653,8 @@ fn continue_chathistory_targets(
             | Event::OnConnect(_)
             | Event::BouncerNetwork(_, _)
             | Event::AddToSidebar(_)
-            | Event::Disconnect(_) => None,
+            | Event::Disconnect(_)
+            | Event::UpdateIcon => None,
         });
 
     start_timestamp.map(|start_timestamp| {
@@ -4950,8 +4957,18 @@ impl Map {
     }
 
     pub fn get_icon_url<'a>(&'a self, server: &Server) -> Option<&'a str> {
-        self.client(server)
-            .and_then(|client| isupport::get_icon_url(&client.isupport))
+        self.client(server).and_then(|client| {
+            if client.config.icon.enabled {
+                client
+                    .config
+                    .icon
+                    .override_url
+                    .as_deref()
+                    .or(isupport::get_icon_url(&client.isupport))
+            } else {
+                None
+            }
+        })
     }
 
     pub fn get_filehost_auth(
