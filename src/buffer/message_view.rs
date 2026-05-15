@@ -11,7 +11,7 @@ use data::redaction::Redaction;
 use data::server::Server;
 use data::user::{ChannelUsers, NickRef};
 use data::{Config, Preview, User, message, metadata, target};
-use iced::widget::text::Wrapping;
+use iced::widget::text::{LineHeight, Wrapping};
 use iced::widget::{
     Space, button, center, column, container, mouse_area, right, row, space,
     stack, text,
@@ -324,15 +324,17 @@ impl<'a> ChannelQueryLayout<'a> {
                         icon::not_sent()
                             .style(theme::svg::error)
                             .height(icon_size)
-                            .width(Length::Shrink),
+                            .width(Length::Shrink)
+                            .content_fit(ContentFit::Contain),
                         text(" Message failed to send")
+                            .line_height(LineHeight::Relative(1.0))
                             .style(theme::text::error)
                             .size(font_size)
                     ]
                     .align_y(alignment::Vertical::Center),
                 )
                 .style(theme::button::bare)
-                .padding(0),
+                .padding(padding::top(self.config.buffer.line_spacing)),
                 &message.server_time,
                 &message.hash,
                 message.command.is_some() && self.connected,
