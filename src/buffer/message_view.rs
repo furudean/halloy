@@ -98,6 +98,21 @@ pub struct ChannelQueryLayout<'a> {
 }
 
 impl<'a> ChannelQueryLayout<'a> {
+    fn reply_nick_to_strip(&self, message: &data::Message) -> Option<String> {
+        self.config
+            .buffer
+            .reply
+            .hide_redundant_mentions
+            .then(|| {
+                message
+                    .reply_preview
+                    .as_ref()
+                    .and_then(|rp| rp.user.as_ref())
+                    .map(|u| u.nickname().as_str().to_owned())
+            })
+            .flatten()
+    }
+
     fn previews_enabled(&self, message: &data::Message) -> bool {
         !self.not_sent(message) && message.redaction.is_none()
     }
@@ -499,6 +514,7 @@ impl<'a> ChannelQueryLayout<'a> {
         right_alignment_middle_width: Option<f32>,
         user: &'a User,
         hide_nickname: bool,
+        nick_prefix_to_strip: Option<&str>,
     ) -> (
         Option<Element<'a, Message>>,
         Element<'a, Message>,
@@ -712,6 +728,7 @@ impl<'a> ChannelQueryLayout<'a> {
                                     )
                                     .map(Message::ContextMenu)
                             },
+                            nick_prefix_to_strip,
                             self.config,
                         ),
                         redaction_message,
@@ -836,6 +853,7 @@ impl<'a> ChannelQueryLayout<'a> {
                     )
                     .map(Message::ContextMenu)
             },
+            None,
             self.config,
         );
 
@@ -985,6 +1003,7 @@ impl<'a> ChannelQueryLayout<'a> {
                     )
                     .map(Message::ContextMenu)
             },
+            None,
             self.config,
         );
 
@@ -1029,14 +1048,22 @@ impl<'a> ChannelQueryLayout<'a> {
             let selected_reaction_texts =
                 selected_reactions_refs(message, self.our_nick);
 
+            let reply_nick = self.reply_nick_to_strip(message);
+
             let (to_nick, reply_preview) = match message.target.source() {
                 message::Source::User(user) => (
                     Some(user.nickname().to_string()),
-                    Some(message.content.preview_text()),
+                    Some(strip_leading_nick_from_preview(
+                        message.content.preview_text(),
+                        reply_nick.as_deref(),
+                    )),
                 ),
                 message::Source::Action(Some(user)) => (
                     Some(user.nickname().to_string()),
-                    Some(message.content.preview_text()),
+                    Some(strip_leading_nick_from_preview(
+                        message.content.preview_text(),
+                        reply_nick.as_deref(),
+                    )),
                 ),
                 _ => (None, None),
             };
@@ -1171,6 +1198,8 @@ impl<'a> LayoutMessage<'a> for ChannelQueryLayout<'a> {
             (false, vec![], vec![], false)
         };
 
+        let reply_nick_to_strip = self.reply_nick_to_strip(message);
+
         let (middle, content, after_content): (
             Option<Element<'a, Message>>,
             Element<'a, Message>,
@@ -1182,6 +1211,7 @@ impl<'a> LayoutMessage<'a> for ChannelQueryLayout<'a> {
                 right_alignment_middle_width,
                 user,
                 hide_nickname,
+                reply_nick_to_strip.as_deref(),
             )),
             message::Source::Server(server_message) => {
                 Some(self.format_server_message(
@@ -1274,6 +1304,7 @@ impl<'a> LayoutMessage<'a> for ChannelQueryLayout<'a> {
                             )
                             .map(Message::ContextMenu)
                     },
+                    None,
                     formatter.config,
                 );
 
@@ -1313,6 +1344,7 @@ impl<'a> LayoutMessage<'a> for ChannelQueryLayout<'a> {
                     message_style,
                     message_font_style,
                     Option::<fn(Color) -> Color>::None,
+                    None,
                     self.config,
                 );
 
@@ -1335,6 +1367,13 @@ impl<'a> LayoutMessage<'a> for ChannelQueryLayout<'a> {
         let selected_reaction_texts =
             selected_reactions(message, self.our_nick);
 
+        let ctx_reply_preview = self.can_send_replies.then(|| {
+            strip_leading_nick_from_preview(
+                message.content.preview_text(),
+                reply_nick_to_strip.as_deref(),
+            )
+        });
+
         let content = context_menu::message(
             content,
             message.target.source(),
@@ -1348,6 +1387,7 @@ impl<'a> LayoutMessage<'a> for ChannelQueryLayout<'a> {
             &message.content,
             message.redaction.as_ref(),
             message.redaction_expanded(&self.config.buffer.redaction),
+            ctx_reply_preview,
             self.config,
             self.theme,
         );
@@ -1550,11 +1590,23 @@ impl<'a> ChannelQueryLayout<'a> {
                 )
             });
 
-        let preview_text = text(reply.preview_text())
-            .style(theme::text::secondary)
-            .size(text_size)
-            .wrapping(Wrapping::None)
-            .ellipsis(text::Ellipsis::End);
+        let inline_reply_nick =
+            self.config.buffer.reply.hide_redundant_mentions.then(|| {
+                reply
+                    .in_reply_to
+                    .as_deref()
+                    .and_then(|p| p.user.as_ref())
+                    .map(|u| u.nickname().as_str().to_owned())
+            });
+
+        let preview_text = text(strip_leading_nick_from_preview(
+            reply.preview_text(),
+            inline_reply_nick.flatten().as_deref(),
+        ))
+        .style(theme::text::secondary)
+        .size(text_size)
+        .wrapping(Wrapping::None)
+        .ellipsis(text::Ellipsis::End);
 
         let mut row = if show_icon {
             row![
@@ -1842,8 +1894,19 @@ impl<'a> ChannelQueryLayout<'a> {
                 false,
             )
         } else {
+            let tooltip_nick =
+                self.config.buffer.reply.hide_redundant_mentions.then(|| {
+                    in_reply_to
+                        .and_then(|p| p.user.as_ref())
+                        .map(|u| u.nickname().as_str().to_owned())
+                });
+            let tooltip_nick = tooltip_nick.flatten();
+
             let max_chars = self.config.buffer.reply.tooltip.max_chars;
-            let preview = reply.preview_text();
+            let preview = strip_leading_nick_from_preview(
+                reply.preview_text(),
+                tooltip_nick.as_deref(),
+            );
             let truncated = (max_chars > 0
                 && preview.chars().count() > max_chars)
                 .then(|| {
@@ -1873,6 +1936,7 @@ impl<'a> ChannelQueryLayout<'a> {
                         dimmed.map(|d| {
                             move |color: Color| d.transform_color(color, bg)
                         }),
+                        tooltip_nick.as_deref(),
                         self.config,
                     ),
                     true,
@@ -2038,4 +2102,12 @@ fn compute_hidden_fragments(
     }
 
     hidden
+}
+
+fn strip_leading_nick_from_preview(text: String, nick: Option<&str>) -> String {
+    let Some(nick) = nick else { return text };
+    message_content::strip_leading_nick(&text, nick)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or(text)
 }

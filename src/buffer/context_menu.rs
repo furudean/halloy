@@ -49,6 +49,7 @@ pub enum Context<'a> {
         content: &'a message::Content,
         source: &'a message::Source,
         redaction: Option<&'a Redaction>,
+        reply_preview: Option<String>,
     },
 }
 
@@ -605,7 +606,7 @@ impl Entry {
                 Context::Message {
                     msgid: Some(msgid),
                     source: message::Source::User(user),
-                    content,
+                    reply_preview: Some(reply_preview),
                     ..
                 },
             ) => menu_button(
@@ -613,7 +614,7 @@ impl Entry {
                 Some(Message::Reply {
                     msgid: msgid.clone(),
                     to_nick: user.nickname().to_string(),
-                    reply_preview: content.preview_text(),
+                    reply_preview: reply_preview.clone(),
                 }),
                 length,
                 theme,
@@ -624,7 +625,7 @@ impl Entry {
                 Context::Message {
                     msgid: Some(msgid),
                     source: message::Source::Action(Some(user)),
-                    content,
+                    reply_preview: Some(reply_preview),
                     ..
                 },
             ) => menu_button(
@@ -632,7 +633,7 @@ impl Entry {
                 Some(Message::Reply {
                     msgid: msgid.clone(),
                     to_nick: user.nickname().to_string(),
-                    reply_preview: content.preview_text(),
+                    reply_preview: reply_preview.clone(),
                 }),
                 length,
                 theme,
@@ -884,6 +885,7 @@ pub fn message<'a, M>(
     message_content: &'a message::Content,
     redaction: Option<&'a Redaction>,
     redaction_expanded: Option<bool>,
+    reply_preview: Option<String>,
     config: &'a Config,
     theme: &'a Theme,
 ) -> Element<'a, M>
@@ -920,6 +922,7 @@ where
                         content: message_content,
                         redaction,
                         source,
+                        reply_preview: reply_preview.clone(),
                     }),
                     length,
                     config,

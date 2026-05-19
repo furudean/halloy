@@ -301,6 +301,7 @@ fn channel_list_view<'a>(
                                     )
                                     .map(Message::ContextMenu)
                             },
+                            None,
                             config,
                         ))
                     };
