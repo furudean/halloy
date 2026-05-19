@@ -1056,6 +1056,12 @@ impl<'a> ChannelQueryLayout<'a> {
 }
 
 impl<'a> LayoutMessage<'a> for ChannelQueryLayout<'a> {
+    fn should_track_reply_target_visibility(&self) -> bool {
+        self.can_send_replies
+            && self.config.buffer.reply.enabled
+            && self.config.buffer.reply.highlight_hovered_message
+    }
+
     fn format(
         &self,
         message: &'a data::Message,
@@ -1067,6 +1073,7 @@ impl<'a> LayoutMessage<'a> for ChannelQueryLayout<'a> {
         >,
         visible_url_messages: &HashMap<message::Hash, Vec<url::Url>>,
         hovered_preview: Option<(message::Hash, usize)>,
+        hovered_reply: Option<message::Hash>,
     ) -> Option<Element<'a, Message>> {
         let mut prefixes: Option<Element<_>> = self.format_prefixes(message);
 
@@ -1407,7 +1414,7 @@ impl<'a> LayoutMessage<'a> for ChannelQueryLayout<'a> {
                 notify_visibility(
                     column,
                     2000.0,
-                    notify_visibility::When::NotVisible,
+                    notify_visibility::When::Disjoint,
                     message.hash,
                     Message::ExitingViewport(message.hash),
                 )
@@ -1415,7 +1422,7 @@ impl<'a> LayoutMessage<'a> for ChannelQueryLayout<'a> {
                 notify_visibility(
                     column,
                     1000.0,
-                    notify_visibility::When::Visible,
+                    notify_visibility::When::Intersecting,
                     message.hash,
                     Message::EnteringViewport(
                         message.hash,
@@ -1443,9 +1450,11 @@ impl<'a> LayoutMessage<'a> for ChannelQueryLayout<'a> {
             container(row![row, content]).into()
         };
 
-        let message_element = if let Some(reply_row) =
-            self.reply_line(message, right_alignment_middle_width)
-        {
+        let message_element = if let Some(reply_row) = self.reply_line(
+            message,
+            right_alignment_middle_width,
+            hovered_reply,
+        ) {
             column![reply_row, message_element].into()
         } else {
             message_element
@@ -1511,10 +1520,7 @@ impl<'a> ChannelQueryLayout<'a> {
 
         // the message may not be loaded
         let Some(reply) = reply else {
-            return text("Replied to a message")
-                .style(theme::text::secondary)
-                .size(text_size)
-                .into();
+            return text("Replied to a message").size(text_size).into();
         };
 
         let nick: Option<Element<_>> = (!reply.blocked)
@@ -1551,7 +1557,6 @@ impl<'a> ChannelQueryLayout<'a> {
             });
 
         let preview_text = text(reply.preview_text())
-            .style(theme::text::secondary)
             .size(text_size)
             .wrapping(Wrapping::None)
             .ellipsis(text::Ellipsis::End);
@@ -1581,6 +1586,7 @@ impl<'a> ChannelQueryLayout<'a> {
         &self,
         message: &'a data::Message,
         right_aligned_width: Option<f32>,
+        hovered_reply: Option<message::Hash>,
     ) -> Option<Element<'a, Message>> {
         message.reply_to.as_ref()?;
 
@@ -1647,32 +1653,33 @@ impl<'a> ChannelQueryLayout<'a> {
                 };
 
             hover_tooltip = (self.config.buffer.reply.tooltip.enabled
-                && !reply_blocked)
-                .then(|| {
-                    let tooltip_nick =
-                        nick_info.as_ref().map(|(user, _, display)| {
-                            display.clone().into_element(
-                                user,
-                                false,
-                                false,
-                                None,
-                                None,
-                                false,
-                                false,
-                                self.theme,
-                                self.config,
-                            )
-                        });
-                    self.reply_hover_tooltip(
-                        reply_preview.hash,
-                        reply_preview.server_time,
-                        tooltip_nick,
-                        reply_content,
-                        in_reply_to.as_deref(),
-                        reply_redaction.as_ref(),
-                        *reply_blocked,
-                    )
-                });
+                && !reply_blocked
+                && hovered_reply != Some(reply_preview.hash))
+            .then(|| {
+                let tooltip_nick =
+                    nick_info.as_ref().map(|(user, _, display)| {
+                        display.clone().into_element(
+                            user,
+                            false,
+                            false,
+                            None,
+                            None,
+                            false,
+                            false,
+                            self.theme,
+                            self.config,
+                        )
+                    });
+                self.reply_hover_tooltip(
+                    reply_preview.hash,
+                    reply_preview.server_time,
+                    tooltip_nick,
+                    reply_content,
+                    in_reply_to.as_deref(),
+                    reply_redaction.as_ref(),
+                    *reply_blocked,
+                )
+            });
 
             let highlight = nick_info.as_ref().is_some_and(|(_, h, _)| *h);
             self.reply_preview_content(
@@ -1700,43 +1707,69 @@ impl<'a> ChannelQueryLayout<'a> {
 
         // right-aligned: fixed short arm offset to content column.
         // left-aligned / top-aligned: arm spans from timestamp midpoint to its edge.
-        let mut row = if let Some(nick_col_width) = right_aligned_width {
-            let nick_col_chars = (nick_col_width / char_width).round() as usize;
-            let indent = timestamp_chars + nick_col_chars - 2;
+        let (indent_text, arm_text): (Element<'_, _>, Element<'_, _>) =
+            if let Some(nick_col_width) = right_aligned_width {
+                let nick_col_chars =
+                    (nick_col_width / char_width).round() as usize;
+                let indent = timestamp_chars + nick_col_chars - 2;
+                (
+                    text(" ".repeat(indent)).size(text_size).into(),
+                    text("┌──").size(text_size).into(),
+                )
+            } else {
+                let half = timestamp_chars / 2;
+                let arm = format!(
+                    "┌{}",
+                    "─".repeat(
+                        half.saturating_sub(1)
+                            + usize::from(!timestamp_chars.is_multiple_of(2))
+                    ),
+                );
+                (
+                    text(" ".repeat(half)).size(text_size).into(),
+                    text(arm).size(text_size).into(),
+                )
+            };
 
-            row![
-                text(" ".repeat(indent) + "┌──")
-                    .style(theme::text::timestamp)
-                    .size(text_size),
-            ]
-        } else {
-            let half = timestamp_chars / 2;
-            let arm = format!(
-                "┌{}",
-                "─".repeat(
-                    half.saturating_sub(1)
-                        + usize::from(!timestamp_chars.is_multiple_of(2))
-                ),
-            );
-            row![
-                text(" ".repeat(half) + &arm)
-                    .style(theme::text::timestamp)
-                    .size(text_size),
-            ]
-        }
-        .spacing(char_width);
-
-        // add a hover preview
         let delay = iced::time::Duration::from_millis(
             self.config.buffer.reply.tooltip.delay,
         );
         let reply_urls = self.reply_preview_urls(message);
 
-        let preview: Element<'_, _> = if let Some(tooltip) = hover_tooltip {
+        // arm + preview form the interactive part; indent is a plain spacer
+        let inner = row![arm_text, preview]
+            .spacing(char_width)
+            .align_y(alignment::Vertical::Center);
+
+        let interactive: Element<'_, _> =
+            if let (Some(reply_preview), Some(channel)) =
+                (&message.reply_preview, self.target.channel())
+            {
+                let server = self.server.clone();
+                let channel = channel.clone();
+                let hash = reply_preview.hash;
+                button(inner)
+                    .style(theme::button::reply_preview)
+                    .padding(0)
+                    .on_press(Message::Link(message::Link::GoToMessage(
+                        server, channel, hash,
+                    )))
+                    .into()
+            } else {
+                // not interactive — use a container to preserve muted colors
+                container(inner)
+                    .style(|theme: &Theme| container::Style {
+                        text_color: Some(theme.styles().text.secondary.color),
+                        ..Default::default()
+                    })
+                    .into()
+            };
+
+        let interactive: Element<'_, _> = if let Some(tooltip) = hover_tooltip {
             iced::widget::tooltip(
-                preview,
+                interactive,
                 container(tooltip).padding(
-                    iced::Padding::new(0.0).bottom(4.0).top(4.0).right(4.0),
+                    iced::Padding::new(0.0).bottom(2.0).top(2.0).right(2.0),
                 ),
                 tooltip::Position::TopLeft,
             )
@@ -1745,24 +1778,28 @@ impl<'a> ChannelQueryLayout<'a> {
             .delay(delay)
             .into()
         } else {
-            preview
+            interactive
         };
 
-        let preview: Element<'_, _> = if !reply_urls.is_empty() {
-            mouse_area(preview)
-                .on_enter(Message::ReplyPreviewHovered(
-                    message.hash,
-                    reply_urls,
-                ))
-                .on_exit(Message::ReplyPreviewUnhovered(message.hash))
-                .into()
-        } else {
-            preview
-        };
+        let interactive: Element<'_, _> =
+            if let Some(reply_preview) = &message.reply_preview {
+                mouse_area(interactive)
+                    .on_enter(Message::ReplyPreviewHovered(
+                        message.hash,
+                        reply_preview.hash,
+                        reply_urls,
+                    ))
+                    .on_exit(Message::ReplyPreviewUnhovered(message.hash))
+                    .into()
+            } else {
+                interactive
+            };
 
-        row = row.push(preview);
+        let element: Element<'_, _> = row![indent_text, interactive]
+            .align_y(alignment::Vertical::Center)
+            .into();
 
-        Some(row.align_y(alignment::Vertical::Center).into())
+        Some(element)
     }
 
     /// Generates the hover preview for a reply
@@ -1919,12 +1956,17 @@ impl<'a> ChannelQueryLayout<'a> {
         }
 
         let in_reply_to_row: Option<Element<_>> = in_reply_to.map(|nested| {
-            self.reply_preview_content(
+            container(self.reply_preview_content(
                 Some(nested),
                 false,
                 true,
                 preview_text_size,
-            )
+            ))
+            .style(|theme: &Theme| container::Style {
+                text_color: Some(theme.styles().text.secondary.color),
+                ..Default::default()
+            })
+            .into()
         });
 
         let body: Element<_> = row![]
