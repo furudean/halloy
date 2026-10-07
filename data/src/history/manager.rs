@@ -10,7 +10,7 @@ use tokio::time::Instant;
 
 use super::filter::{Filter, FilterChain};
 use super::reroute::RerouteRules;
-use super::saved_buffers::SavedBuffers;
+use super::sidebar_buffers::SidebarBuffers;
 use super::targets_timestamps::{self, TargetsTimestamps};
 use crate::capabilities::LabeledResponseContext;
 use crate::history::{self, History, MessageReferences, ReadMarker, metadata};
@@ -111,7 +111,7 @@ pub struct Manager {
     reroute_rules: RerouteRules,
     data: Data,
     last_draft_changed: Option<tokio::time::Instant>,
-    saved_buffers: SavedBuffers,
+    sidebar_buffers: SidebarBuffers,
     targets_timestamps: TargetsTimestamps,
 }
 
@@ -426,7 +426,7 @@ impl Manager {
         clients: &client::Map,
         server_messages_config: &config::buffer::ServerMessages,
     ) -> Option<impl Future<Output = Message> + use<>> {
-        self.saved_buffers.close(&kind);
+        self.sidebar_buffers.close(&kind);
 
         let history = self.data.map.remove(&kind)?;
         let seed = clients.get_seed(&kind);
@@ -462,7 +462,7 @@ impl Manager {
         clients: &client::Map,
         server_messages_config: config::buffer::ServerMessages,
     ) -> impl Future<Output = Message> + use<> {
-        self.saved_buffers.exit();
+        self.sidebar_buffers.exit();
 
         let targets_timestamps = self.targets_timestamps.exit(clients);
 
@@ -947,7 +947,7 @@ impl Manager {
         clients: &client::Map,
         restore_on_launch: bool,
     ) -> bool {
-        self.saved_buffers.update(
+        self.sidebar_buffers.update(
             sidebar_queries(&self.data.map, &self.filters),
             clients,
             restore_on_launch,
@@ -955,14 +955,14 @@ impl Manager {
     }
 
     pub fn saved_buffers(&self) -> Vec<(Server, Target)> {
-        self.saved_buffers.to_vec()
+        self.sidebar_buffers.to_vec()
     }
 
     pub fn disconnected_channels(
         &self,
         server: &Server,
     ) -> impl Iterator<Item = &target::Channel> {
-        self.saved_buffers.disconnected_channels(server)
+        self.sidebar_buffers.disconnected_channels(server)
     }
 
     pub fn is_disconnected_channel(
@@ -978,7 +978,7 @@ impl Manager {
     }
 
     pub fn left_channel(&mut self, server: Server, channel: target::Channel) {
-        self.saved_buffers.left(server, channel);
+        self.sidebar_buffers.left(server, channel);
     }
 
     pub fn server_disconnected(
@@ -986,7 +986,7 @@ impl Manager {
         server: &Server,
         clients: &client::Map,
     ) {
-        self.saved_buffers.server_disconnected(server, clients);
+        self.sidebar_buffers.server_disconnected(server, clients);
     }
 
     pub fn restore_saved_buffers(
@@ -1013,7 +1013,7 @@ impl Manager {
                 self.open(history::Kind::Query(server.clone(), query.clone()));
             }
 
-            self.saved_buffers.restore(server, target);
+            self.sidebar_buffers.restore(server, target);
         }
 
         tasks

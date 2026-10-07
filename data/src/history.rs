@@ -29,7 +29,7 @@ pub mod filter;
 pub mod manager;
 pub mod metadata;
 pub mod reroute;
-pub mod saved_buffers;
+pub mod sidebar_buffers;
 pub mod targets_timestamps;
 
 // TODO: Make this configurable?
