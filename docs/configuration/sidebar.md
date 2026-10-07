@@ -143,10 +143,10 @@ channels = ["#rust", "#halloy", "#halloy-test"]
 
 ## `restore_on_launch`
 
-Restore the buffers that were in the sidebar during the last session. 
+Restore the buffers that were in the sidebar during the last session.
 
 Channels are not automatically joined, this is instead covered by
-[`server.<server_name>.channels`](configuration/servers#channels).
+[`servers.<name>.channels`](/configuration/servers#channels).
 
 ```toml
 # Type: boolean

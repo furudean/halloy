@@ -736,7 +736,7 @@ impl Dashboard {
                         self.toggle_command_bar(
                             servers,
                             clients,
-                            &closed_upstream_buffers(self, clients),
+                            &closed_upstream_buffers(self, servers, clients),
                             version,
                             config,
                             theme,
@@ -1040,7 +1040,9 @@ impl Dashboard {
                                 self.toggle_command_bar(
                                     servers,
                                     clients,
-                                    &closed_upstream_buffers(self, clients),
+                                    &closed_upstream_buffers(
+                                        self, servers, clients,
+                                    ),
                                     version,
                                     config,
                                     theme,
@@ -1054,7 +1056,9 @@ impl Dashboard {
                             self.toggle_command_bar(
                                 servers,
                                 clients,
-                                &closed_upstream_buffers(self, clients),
+                                &closed_upstream_buffers(
+                                    self, servers, clients,
+                                ),
                                 version,
                                 config,
                                 theme,
@@ -1233,7 +1237,9 @@ impl Dashboard {
                             self.toggle_command_bar(
                                 servers,
                                 clients,
-                                &closed_upstream_buffers(self, clients),
+                                &closed_upstream_buffers(
+                                    self, servers, clients,
+                                ),
                                 version,
                                 config,
                                 theme,
@@ -1950,7 +1956,11 @@ impl Dashboard {
                         .view(
                             servers,
                             clients,
-                            &all_upstream_buffers(clients, &self.history),
+                            &all_upstream_buffers(
+                                servers,
+                                clients,
+                                &self.history,
+                            ),
                             self.focus,
                             self.buffer_resize_action(),
                             version,
@@ -2889,7 +2899,7 @@ impl Dashboard {
                     self.toggle_command_bar(
                         servers,
                         clients,
-                        &closed_upstream_buffers(self, clients),
+                        &closed_upstream_buffers(self, servers, clients),
                         version,
                         config,
                         theme,
@@ -4257,8 +4267,17 @@ impl Dashboard {
         &mut self,
         server: &Server,
         clients: &data::client::Map,
-    ) {
-        self.history.server_disconnected(server, clients);
+    ) -> Task<Message> {
+        Task::batch(
+            self.history
+                .server_disconnected(server, clients)
+                .into_iter()
+                .map(|task| Task::perform(task, Message::History)),
+        )
+    }
+
+    pub fn server_removed(&mut self, server: &Server) {
+        self.history.server_removed(server);
     }
 
     pub fn add_to_sidebar(&mut self, server: Server, query: target::Query) {
@@ -5798,34 +5817,43 @@ impl Panes {
 }
 
 fn all_upstream_buffers(
+    servers: &server::Map,
     clients: &client::Map,
     history: &history::Manager,
 ) -> Vec<buffer::Upstream> {
     clients
-        .connected_servers()
-        .flat_map(|server| {
+        .iter()
+        .flat_map(|(server, state)| {
+            let disconnected = history.disconnected_channels(server);
+
+            // Matches the sidebar, which keeps the channels and queries from
+            // a disconnected server's last connection.
+            let (channels, queries) = match state {
+                client::State::Ready(client) => (
+                    client.sidebar_channels(disconnected).collect(),
+                    history.get_unique_queries(server),
+                ),
+                client::State::Disconnected { .. } => servers
+                    .get(server)
+                    .map(|config| {
+                        (
+                            client::offline_sidebar_channels(
+                                &config,
+                                disconnected,
+                            ),
+                            history.get_unique_queries(server),
+                        )
+                    })
+                    .unwrap_or_default(),
+            };
+
             std::iter::once(buffer::Upstream::Server(server.clone()))
-                .chain(
-                    clients
-                        .client(server)
-                        .into_iter()
-                        .flat_map(|client| {
-                            client.sidebar_channels(
-                                history.disconnected_channels(server),
-                            )
-                        })
-                        .map(|channel| {
-                            buffer::Upstream::Channel(
-                                server.clone(),
-                                channel.clone(),
-                            )
-                        }),
-                )
-                .chain(history.get_unique_queries(server).into_iter().map(
-                    |nick| {
-                        buffer::Upstream::Query(server.clone(), nick.clone())
-                    },
-                ))
+                .chain(channels.into_iter().map(|channel| {
+                    buffer::Upstream::Channel(server.clone(), channel.clone())
+                }))
+                .chain(queries.into_iter().map(|nick| {
+                    buffer::Upstream::Query(server.clone(), nick.clone())
+                }))
         })
         .collect()
 }
@@ -5849,11 +5877,12 @@ fn open_upstream_buffers(dashboard: &Dashboard) -> Vec<buffer::Upstream> {
 
 fn closed_upstream_buffers(
     dashboard: &Dashboard,
+    servers: &server::Map,
     clients: &client::Map,
 ) -> Vec<buffer::Upstream> {
     let open_buffers = open_upstream_buffers(dashboard);
 
-    all_upstream_buffers(clients, &dashboard.history)
+    all_upstream_buffers(servers, clients, &dashboard.history)
         .into_iter()
         .filter(|buffer| !open_buffers.contains(buffer))
         .collect()

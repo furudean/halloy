@@ -70,12 +70,6 @@ impl SidebarBuffers {
                 self.changed |= buffers.channels.remove(channel);
             }
 
-            // A rejected PART leaves the channel joined, so it is saved again
-            // on the next update.
-            if let Some(joined) = self.joined.get_mut(server) {
-                joined.remove(channel);
-            }
-
             self.closing
                 .entry(server.clone())
                 .or_default()
@@ -111,6 +105,18 @@ impl SidebarBuffers {
         }
 
         self.joined.remove(server);
+    }
+
+    pub fn server_removed(&mut self, server: &Server) {
+        if let Some(buffers) = self.buffers.get_mut(server) {
+            self.changed |= !buffers.channels.is_empty();
+
+            buffers.channels.clear();
+        }
+
+        self.disconnected.remove(server);
+        self.joined.remove(server);
+        self.closing.remove(server);
     }
 
     // Returns true when the saved buffers changed.
@@ -160,20 +166,15 @@ impl SidebarBuffers {
                 &mut self.buffers.entry(server.clone()).or_default().channels;
             let closing = self.closing.get(server);
 
-            joined.retain(|channel| {
-                let parted = !clients.contains_channel(server, channel);
-
-                // Left channels stay saved, since their buffer stays open.
-                if parted
-                    && closing.is_some_and(|closing| closing.contains(channel))
-                {
-                    changed |= saved.remove(channel);
-                }
-
-                !parted
-            });
+            // Left channels stay saved, since their buffer stays open.
+            joined.retain(|channel| clients.contains_channel(server, channel));
 
             for channel in clients.get_channels(server) {
+                // Closed channels stay unsaved while their PART is in flight.
+                if closing.is_some_and(|closing| closing.contains(channel)) {
+                    continue;
+                }
+
                 if !joined.contains(channel) {
                     joined.insert(channel.clone());
                     changed |= saved.insert(channel.clone());
@@ -558,11 +559,64 @@ mod tests {
         close(&mut buffers, "#halloy");
 
         // The PART is in flight, so the channel is still joined.
-        update(&mut buffers, &clients);
-        assert!(is_saved(&buffers, "#halloy"));
+        assert!(update(&mut buffers, &clients));
+        assert!(!is_saved(&buffers, "#halloy"));
 
         part(&mut clients, &mut buffers, "#halloy");
+        assert!(!update(&mut buffers, &clients));
+        assert!(!is_saved(&buffers, "#halloy"));
+        assert_eq!(times_disconnected(&buffers, "#halloy"), 0);
+    }
+
+    #[test]
+    fn removed_server_channels_are_forgotten() {
+        let mut clients = clients();
+        let mut buffers = SidebarBuffers::default();
+
+        join(&mut clients, &mut buffers, "#halloy");
+        join(&mut clients, &mut buffers, "#rust");
+        update(&mut buffers, &clients);
+        kick(&mut clients, &mut buffers, "#rust");
+
+        // Mirrors the app, which drops the client before forgetting it.
+        clients.remove(&server());
+        buffers.server_removed(&server());
         assert!(update(&mut buffers, &clients));
+        assert!(!is_saved(&buffers, "#halloy"));
+        assert!(!is_saved(&buffers, "#rust"));
+        assert_eq!(times_disconnected(&buffers, "#rust"), 0);
+    }
+
+    #[test]
+    fn closed_channel_is_not_saved_on_exit_before_part_arrives() {
+        let mut clients = clients();
+        let mut buffers = SidebarBuffers::default();
+
+        join(&mut clients, &mut buffers, "#halloy");
+        update(&mut buffers, &clients);
+
+        close(&mut buffers, "#halloy");
+
+        // Mirrors the dashboard, which updates once more before exiting.
+        update(&mut buffers, &clients);
+        buffers.exit();
+        assert!(!is_saved(&buffers, "#halloy"));
+    }
+
+    #[test]
+    fn closed_channel_is_not_saved_when_server_disconnects_before_part_arrives()
+    {
+        let mut clients = clients();
+        let mut buffers = SidebarBuffers::default();
+
+        join(&mut clients, &mut buffers, "#halloy");
+        update(&mut buffers, &clients);
+
+        close(&mut buffers, "#halloy");
+        update(&mut buffers, &clients);
+
+        disconnect(&mut clients, &mut buffers);
+        update(&mut buffers, &clients);
         assert!(!is_saved(&buffers, "#halloy"));
         assert_eq!(times_disconnected(&buffers, "#halloy"), 0);
     }

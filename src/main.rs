@@ -869,9 +869,12 @@ impl Halloy {
                     sent_time,
                     autoconnect,
                 } => {
-                    if let Screen::Dashboard(dashboard) = &mut self.screen {
-                        dashboard.server_disconnected(&server, &self.clients);
-                    }
+                    let disconnected_task = match &mut self.screen {
+                        Screen::Dashboard(dashboard) => dashboard
+                            .server_disconnected(&server, &self.clients)
+                            .map(Message::Dashboard),
+                        _ => Task::none(),
+                    };
 
                     self.clients.disconnected(server.clone(), autoconnect);
 
@@ -886,7 +889,7 @@ impl Halloy {
                     );
 
                     if is_initial || self.power.suppresses_connection_events() {
-                        Task::none()
+                        disconnected_task
                     } else {
                         if !self.main_window.focused {
                             self.notifications.notify(
@@ -897,6 +900,7 @@ impl Halloy {
                         }
 
                         Task::batch(vec![
+                            disconnected_task,
                             dashboard
                                 .broadcast(
                                     &server,
@@ -1851,7 +1855,7 @@ impl Halloy {
 
     fn remove(&mut self, server: Server) -> Task<Message> {
         match &mut self.screen {
-            Screen::Dashboard(_) => {
+            Screen::Dashboard(dashboard) => {
                 let bouncer_networks: Vec<_> = self
                     .servers
                     .get_bouncer_networks(&server)
@@ -1867,6 +1871,8 @@ impl Halloy {
                     self.servers.remove(&bouncer_network);
 
                     self.clients.remove(&bouncer_network);
+
+                    dashboard.server_removed(&bouncer_network);
                 }
 
                 self.controllers.end(
@@ -1877,6 +1883,8 @@ impl Halloy {
                 self.servers.remove(&server);
 
                 self.clients.remove(&server);
+
+                dashboard.server_removed(&server);
 
                 Task::none()
             }

@@ -1,6 +1,5 @@
 use std::{convert, iter};
 
-use data::appearance::theme::FontStyle;
 use data::buffer::{Buffer, BufferRef};
 use data::config::server::SidebarVisibility;
 use data::config::sidebar::{InternalBuffer, PrimaryIcon};
@@ -1629,11 +1628,6 @@ fn upstream_buffer_button<'a>(
     let show_highlight_title =
         indicators.highlight && config.sidebar.highlight_indicator.title;
 
-    // Server disconnection takes priority over channel disconnection.
-    let server_disconnected =
-        matches!(connection_status, ConnectionStatus::Disconnected { .. });
-    let channel_disconnected = *disconnected && !server_disconnected;
-
     let buffer_title_style = if show_highlight_title {
         theme::text::highlight_indicator
     } else if show_unread_title {
@@ -1646,20 +1640,13 @@ fn upstream_buffer_button<'a>(
             buffer::Upstream::Server(_) => theme::text::error,
             _ => theme::text::secondary,
         }
-    } else if channel_disconnected {
+    } else if *disconnected {
         theme::text::secondary
     } else {
         theme::text::primary
     };
 
-    let buffer_title_font = if channel_disconnected {
-        Some(font::get(
-            theme::font_style::secondary(theme).unwrap_or_default()
-                + FontStyle::Italic,
-        ))
-    } else {
-        theme::font_style::primary(theme).map(font::get)
-    };
+    let buffer_title_font = theme::font_style::primary(theme).map(font::get);
 
     let dimensions = Dimensions::from(&config.sidebar);
 

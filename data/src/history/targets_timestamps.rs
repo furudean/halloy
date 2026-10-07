@@ -13,7 +13,6 @@ const REFRESH_EVERY: Duration = Duration::from_secs(60);
 
 #[derive(Debug)]
 pub struct TargetsTimestamps {
-    read: HashMap<Server, DateTime<Utc>>,
     written: HashMap<Server, DateTime<Utc>>,
     refreshed_at: Instant,
 }
@@ -21,7 +20,6 @@ pub struct TargetsTimestamps {
 impl Default for TargetsTimestamps {
     fn default() -> Self {
         Self {
-            read: HashMap::new(),
             written: HashMap::new(),
             refreshed_at: Instant::now(),
         }
@@ -40,34 +38,40 @@ impl TargetsTimestamps {
 
         self.refreshed_at = now;
 
-        let read = HashMap::from_iter(clients.chathistory_targets_timestamps());
+        self.write_unwritten(clients.chathistory_targets_timestamps())
+    }
 
-        let mut tasks = vec![];
-
-        for (server, timestamp) in std::mem::replace(&mut self.read, read) {
-            if self.written.get(&server) == Some(&timestamp) {
-                continue;
-            }
-
-            self.written.insert(server.clone(), timestamp);
-
-            tasks.push(write(server, timestamp));
-        }
-
-        tasks
+    pub fn server_disconnected(
+        &mut self,
+        server: &Server,
+        clients: &client::Map,
+    ) -> Vec<BoxFuture<'static, Message>> {
+        self.write_unwritten(
+            clients
+                .chathistory_targets_timestamps()
+                .into_iter()
+                .filter(|(timestamp_server, _)| timestamp_server == server),
+        )
     }
 
     pub fn exit(
         &mut self,
         clients: &client::Map,
     ) -> Vec<BoxFuture<'static, Message>> {
-        clients
-            .chathistory_targets_timestamps()
+        self.write_unwritten(clients.chathistory_targets_timestamps())
+    }
+
+    fn write_unwritten(
+        &mut self,
+        timestamps: impl IntoIterator<Item = (Server, DateTime<Utc>)>,
+    ) -> Vec<BoxFuture<'static, Message>> {
+        timestamps
             .into_iter()
-            .filter(|(server, timestamp)| {
-                self.written.get(server) != Some(timestamp)
+            .filter_map(|(server, timestamp)| {
+                (self.written.insert(server.clone(), timestamp)
+                    != Some(timestamp))
+                .then(|| write(server, timestamp))
             })
-            .map(|(server, timestamp)| write(server, timestamp))
             .collect()
     }
 }

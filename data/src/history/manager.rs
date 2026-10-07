@@ -985,8 +985,14 @@ impl Manager {
         &mut self,
         server: &Server,
         clients: &client::Map,
-    ) {
+    ) -> Vec<BoxFuture<'static, Message>> {
         self.sidebar_buffers.server_disconnected(server, clients);
+
+        self.targets_timestamps.server_disconnected(server, clients)
+    }
+
+    pub fn server_removed(&mut self, server: &Server) {
+        self.sidebar_buffers.server_removed(server);
     }
 
     pub fn restore_saved_buffers(

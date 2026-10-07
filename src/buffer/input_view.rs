@@ -2244,9 +2244,11 @@ impl State {
 
                         let event = has_channel_argument.then(|| {
                             let buffer_action = match buffer {
+                                // If it's a channel, we want to replace it when hopping to a new channel.
                                 Upstream::Channel(..) => {
                                     BufferAction::ReplacePane
                                 }
+                                // If it's a server or query, we want to follow config for actions.
                                 Upstream::Server(..) | Upstream::Query(..) => {
                                     config.actions.buffer.message_channel
                                 }
