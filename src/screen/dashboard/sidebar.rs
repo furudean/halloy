@@ -276,7 +276,8 @@ impl Sidebar {
                         let mut collapsible_buffers = vec![];
 
                         // Channels from the connected server.
-                        for (channel, muted) in connection.channels_with_muted()
+                        for channel in connection
+                            .sidebar_channels(history.restored_channels(server))
                         {
                             if let Some(buffer_data) = upstream_buffer_data(
                                 buffer::Upstream::Channel(
@@ -287,7 +288,7 @@ impl Sidebar {
                                     server.clone(),
                                     channel.clone(),
                                 ),
-                                muted,
+                                connection.channel_muted(channel),
                                 casemapping,
                             ) {
                                 collapsible_buffers.push(buffer_data);

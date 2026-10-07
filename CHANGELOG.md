@@ -4,6 +4,8 @@ Added:
 
 - Added `buffer.text_input.upload_long_paste` to automatically use filehost in case pasted text is too long
 - Right-clickable text in the server buffer now offers a context menu
+- Added `sidebar.restore_on_launch`. When enabled, buffers that were in the
+  sidebar during the last session will be restored.
 
 Fixed:
 
@@ -20,7 +22,7 @@ Changed:
 
 Thanks:
 
-- Contributions: @httpsterio
+- Contributions: @httpsterio, @furudean
 - Bug reports: @0xS3raph, @httpsterio, tbo, @marcelo4768
 - Feature requests: @ainola
 

@@ -29,6 +29,8 @@ pub mod filter;
 pub mod manager;
 pub mod metadata;
 pub mod reroute;
+pub mod saved_buffers;
+pub mod targets_timestamps;
 
 // TODO: Make this configurable?
 /// Max # messages to persist
@@ -1593,6 +1595,15 @@ impl History {
 
                 *last_updated_at = Some(Instant::now());
             }
+        }
+    }
+
+    pub fn shown_in_sidebar(&self) -> bool {
+        match self {
+            History::Full { .. } => true,
+            History::Partial {
+                show_in_sidebar, ..
+            } => *show_in_sidebar,
         }
     }
 

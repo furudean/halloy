@@ -139,11 +139,6 @@ impl From<Target> for Destination {
 #[derive(Debug)]
 pub enum Message {
     ChatHistoryRequest(Server, ChatHistorySubcommand),
-    ChatHistoryTargetsTimestampUpdated(
-        Server,
-        DateTime<Utc>,
-        Result<(), Error>,
-    ),
     RequestNewerChatHistory(Server, Target, DateTime<Utc>, bool),
 }
 
@@ -182,7 +177,6 @@ pub enum Event {
     LoggedIn(DateTime<Utc>),
     AddedIsupportParam(isupport::Parameter),
     ChatHistoryTargetReceived(Target, DateTime<Utc>),
-    ChatHistoryTargetsReceived(DateTime<Utc>),
     DirectMessage(message::Encoded, Nick, User),
     MonitoredOnline(Vec<User>),
     MonitoredOffline(Vec<Nick>),
@@ -241,6 +235,8 @@ pub struct Client {
     chathistory_requests: HashMap<Target, ChatHistoryRequest>,
     chathistory_exhausted: HashMap<Target, bool>,
     chathistory_targets_request: Option<ChatHistoryRequest>,
+    chathistory_targets_complete: bool,
+    latest_server_time: Option<DateTime<Utc>>,
     notification_blackout: NotificationBlackout,
     registration_required_channels: Vec<target::Channel>,
     isupport: HashMap<isupport::Kind, isupport::Parameter>,
@@ -307,6 +303,8 @@ impl Client {
             chathistory_requests: HashMap::new(),
             chathistory_exhausted: HashMap::new(),
             chathistory_targets_request: None,
+            chathistory_targets_complete: false,
+            latest_server_time: None,
             notification_blackout: NotificationBlackout::Blackout(
                 Instant::now(),
             ),
@@ -993,6 +991,11 @@ impl Client {
 
         let stop_reroute = self.stop_reroute(&message);
 
+        if let Some(server_time) = message.server_time() {
+            self.latest_server_time =
+                self.latest_server_time.max(Some(server_time));
+        }
+
         let events = self.handle(message, None, config)?;
 
         if stop_reroute {
@@ -1210,6 +1213,13 @@ impl Client {
                                         }
                                     }
                                     Some(BatchKind::ChathistoryTargets) => {
+                                        let autorequest = self
+                                            .chathistory_targets_request
+                                            .as_ref()
+                                            .is_some_and(|request| {
+                                                request.autorequest
+                                            });
+
                                         let continuation_subcommand = self
                                             .finish_chathistory_request(
                                                 None,
@@ -1243,12 +1253,9 @@ impl Client {
                                                 continuation_subcommand,
                                                 TokenPriority::High,
                                             );
-                                        } else {
-                                            finished.events.push(
-                                                Event::ChatHistoryTargetsReceived(
-                                                    Utc::now(),
-                                                ),
-                                            );
+                                        } else if autorequest {
+                                            self.chathistory_targets_complete =
+                                                true;
                                         }
                                     }
                                     Some(BatchKind::Multiline(
@@ -4174,48 +4181,47 @@ impl Client {
         .boxed()
     }
 
-    pub fn overwrite_chathistory_targets_timestamp(
-        &self,
-        timestamp: DateTime<Utc>,
-    ) -> impl Future<Output = Message> + use<> {
-        let server = self.server.clone();
-
-        async move {
-            let result = overwrite_chathistory_targets_timestamp(
-                server.clone(),
-                timestamp,
-            )
-            .await;
-
-            Message::ChatHistoryTargetsTimestampUpdated(
-                server, timestamp, result,
-            )
-        }
-        .boxed()
-    }
-
     pub fn channels(&self) -> impl Iterator<Item = &target::Channel> {
         self.chanmap.keys()
     }
 
-    pub fn channels_with_muted(
-        &self,
-    ) -> impl Iterator<Item = (&target::Channel, bool)> {
+    pub fn sidebar_channels<'a>(
+        &'a self,
+        restored: impl Iterator<Item = &'a target::Channel>,
+    ) -> impl Iterator<Item = &'a target::Channel> {
+        let casemapping = self.casemapping();
+        let chantypes = self.chantypes();
+
+        let compare = move |a: &&target::Channel, b: &&target::Channel| {
+            compare_channels(
+                &self.config,
+                chantypes,
+                casemapping,
+                a.as_normalized_str(),
+                b.as_normalized_str(),
+            )
+        };
+
+        let restored = restored
+            .filter(|channel| !self.chanmap.contains_key(*channel))
+            .sorted_by(compare);
+
+        self.chanmap
+            .keys()
+            .merge_by(restored, move |a, b| compare(a, b).is_le())
+    }
+
+    pub fn channel_muted(&self, channel: &target::Channel) -> bool {
         let casemapping = self.casemapping();
 
-        self.chanmap.keys().map(move |channel| {
-            (
-                channel,
-                self.config
-                    .channels
-                    .iter()
-                    .find(|config_channel| {
-                        casemapping.normalize(&config_channel.name)
-                            == channel.as_normalized_str()
-                    })
-                    .is_some_and(|config_channel| config_channel.mute),
-            )
-        })
+        self.config
+            .channels
+            .iter()
+            .find(|config_channel| {
+                casemapping.normalize(&config_channel.name)
+                    == channel.as_normalized_str()
+            })
+            .is_some_and(|config_channel| config_channel.mute)
     }
 
     fn channel_users_received(&mut self, target_channel: target::Channel) {
@@ -4852,7 +4858,6 @@ fn continue_chathistory_between(
             | Event::LoggedIn(_)
             | Event::AddedIsupportParam(_)
             | Event::ChatHistoryTargetReceived(_, _)
-            | Event::ChatHistoryTargetsReceived(_)
             | Event::MonitoredOnline(_)
             | Event::MonitoredOffline(_)
             | Event::OnConnect(_)
@@ -4901,7 +4906,6 @@ fn continue_chathistory_targets(
             | Event::JoinedChannel(_, _)
             | Event::LoggedIn(_)
             | Event::AddedIsupportParam(_)
-            | Event::ChatHistoryTargetsReceived(_)
             | Event::MonitoredOnline(_)
             | Event::MonitoredOffline(_)
             | Event::OnConnect(_)
@@ -5629,14 +5633,20 @@ impl Map {
         })
     }
 
-    pub fn overwrite_chathistory_targets_timestamp(
+    pub fn chathistory_targets_timestamps(
         &self,
-        server: &Server,
-        server_time: DateTime<Utc>,
-    ) -> Option<impl Future<Output = Message> + use<>> {
-        self.client(server).map(|client| {
-            client.overwrite_chathistory_targets_timestamp(server_time)
-        })
+    ) -> Vec<(Server, DateTime<Utc>)> {
+        self.0
+            .iter()
+            .filter_map(|(server, state)| match state {
+                State::Ready(client) if client.chathistory_targets_complete => {
+                    client
+                        .latest_server_time
+                        .map(|server_time| (server.clone(), server_time))
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     pub fn get_server_supports_detach(&self, server: &Server) -> bool {

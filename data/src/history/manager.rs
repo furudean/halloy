@@ -10,6 +10,8 @@ use tokio::time::Instant;
 
 use super::filter::{Filter, FilterChain};
 use super::reroute::RerouteRules;
+use super::saved_buffers::SavedBuffers;
+use super::targets_timestamps::TargetsTimestamps;
 use crate::capabilities::LabeledResponseContext;
 use crate::history::{self, History, MessageReferences, ReadMarker, metadata};
 use crate::message::broadcast::{self, Broadcast};
@@ -90,6 +92,7 @@ pub enum Message {
     ResendMessage(history::Kind, message::Message),
     DraftsSaved,
     EchoEvents(Server, Vec<EchoEvent>),
+    TargetsTimestampUpdated(Server, DateTime<Utc>, Result<(), client::Error>),
 }
 
 pub enum Event {
@@ -108,6 +111,8 @@ pub struct Manager {
     reroute_rules: RerouteRules,
     data: Data,
     last_draft_changed: Option<tokio::time::Instant>,
+    saved_buffers: SavedBuffers,
+    targets_timestamps: TargetsTimestamps,
 }
 
 impl Manager {
@@ -369,6 +374,16 @@ impl Manager {
             Message::EchoEvents(server, events) => {
                 return Some(Event::EchoEvents(server, events));
             }
+            Message::TargetsTimestampUpdated(server, timestamp, Ok(())) => {
+                log::debug!(
+                    "updated targets timestamp for {server} to {timestamp}"
+                );
+            }
+            Message::TargetsTimestampUpdated(server, timestamp, Err(error)) => {
+                log::warn!(
+                    "failed to update targets timestamp for {server} to {timestamp}: {error}"
+                );
+            }
         }
 
         None
@@ -404,7 +419,12 @@ impl Manager {
         clients: &client::Map,
         server_messages_config: &config::buffer::ServerMessages,
     ) -> Vec<BoxFuture<'static, Message>> {
-        self.data.flush_all(now, clients, server_messages_config)
+        let mut tasks =
+            self.data.flush_all(now, clients, server_messages_config);
+
+        tasks.extend(self.targets_timestamps.refresh(now, clients));
+
+        tasks
     }
 
     pub fn close(
@@ -413,6 +433,8 @@ impl Manager {
         clients: &client::Map,
         server_messages_config: &config::buffer::ServerMessages,
     ) -> Option<impl Future<Output = Message> + use<>> {
+        self.saved_buffers.close(&kind);
+
         let history = self.data.map.remove(&kind)?;
         let seed = clients.get_seed(&kind);
         let server_messages_config = server_messages_config.clone();
@@ -447,6 +469,10 @@ impl Manager {
         clients: &client::Map,
         server_messages_config: config::buffer::ServerMessages,
     ) -> impl Future<Output = Message> + use<> {
+        self.saved_buffers.exit();
+
+        let targets_timestamps = self.targets_timestamps.exit(clients);
+
         let data = std::mem::take(&mut self.data);
         let drafts = data.input.clone_drafts();
         let seeded_map = data
@@ -467,6 +493,21 @@ impl Manager {
 
             let results = future::join_all(tasks).await;
             input::save_drafts(drafts).await;
+
+            for (server, timestamp) in targets_timestamps {
+                if let Err(error) =
+                    client::overwrite_chathistory_targets_timestamp(
+                        server.clone(),
+                        timestamp,
+                    )
+                    .await
+                {
+                    log::warn!(
+                        "failed to update targets timestamp for {server} to {timestamp}: {error}"
+                    );
+                }
+            }
+
             Message::Exited(results)
         }
     }
@@ -898,26 +939,68 @@ impl Manager {
     }
 
     pub fn get_unique_queries(&self, server: &Server) -> Vec<&target::Query> {
-        self.data
-            .map
-            .iter()
-            .filter_map(|(kind, history)| match kind {
-                #[allow(clippy::bool_comparison)] // easy to miss exclamation
-                history::Kind::Query(s, query) => (s == server
-                    && self.filters.iter().all(|filter| {
-                        filter.match_query(query, server) == false
-                    })
-                    && match history {
-                        History::Full { .. } => true,
-                        History::Partial {
-                            show_in_sidebar, ..
-                        } => *show_in_sidebar,
-                    })
-                .then_some(query),
-                _ => None,
-            })
+        sidebar_queries(&self.data.map, &self.filters)
+            .filter_map(|(s, query)| (s == server).then_some(query))
             .sorted_by(Ord::cmp)
             .collect()
+    }
+
+    // Returns true when the saved buffers changed
+    pub fn update_saved_buffers(
+        &mut self,
+        clients: &client::Map,
+        restore_on_launch: bool,
+    ) -> bool {
+        self.saved_buffers.update(
+            sidebar_queries(&self.data.map, &self.filters),
+            clients,
+            restore_on_launch,
+        )
+    }
+
+    pub fn saved_buffers(&self) -> Vec<(Server, Target)> {
+        self.saved_buffers.to_vec()
+    }
+
+    pub fn restored_channels(
+        &self,
+        server: &Server,
+    ) -> impl Iterator<Item = &target::Channel> {
+        self.saved_buffers.restored_channels(server)
+    }
+
+    pub fn server_disconnected(&mut self, server: &Server) {
+        self.saved_buffers.disconnected(server);
+    }
+
+    pub fn restore_saved_buffers(
+        &mut self,
+        buffers: Vec<(Server, Target)>,
+        servers: &server::ConfigMap,
+    ) -> Vec<impl Future<Output = Message> + use<>> {
+        let mut tasks = vec![];
+
+        for (server, target) in buffers {
+            // The bouncer rejoins the channels of its networks.
+            if !servers.contains(&server.name)
+                || (server.is_bouncer_network()
+                    && matches!(target, Target::Channel(_)))
+            {
+                continue;
+            }
+
+            // Load metadata first, since it is skipped once the history entry
+            // exists.
+            tasks.extend(self.load_metadata(server.clone(), target.clone()));
+
+            if let Target::Query(query) = &target {
+                self.open(history::Kind::Query(server.clone(), query.clone()));
+            }
+
+            self.saved_buffers.restore(server, target);
+        }
+
+        tasks
     }
 
     pub fn server_kinds(&self, server: Server) -> Vec<history::Kind> {
@@ -1558,6 +1641,22 @@ fn with_limit<'a>(
         }
         None => messages.collect(),
     }
+}
+
+// Returns the queries shown in the sidebar, across all servers.
+fn sidebar_queries<'a>(
+    map: &'a HashMap<history::Kind, History>,
+    filters: &'a [Filter],
+) -> impl Iterator<Item = (&'a Server, &'a target::Query)> + Clone {
+    map.iter().filter_map(|(kind, history)| match kind {
+        #[allow(clippy::bool_comparison)] // easy to miss exclamation
+        history::Kind::Query(server, query) => (filters
+            .iter()
+            .all(|filter| filter.match_query(query, server) == false)
+            && history.shown_in_sidebar())
+        .then_some((server, query)),
+        _ => None,
+    })
 }
 
 #[derive(Debug, Default)]

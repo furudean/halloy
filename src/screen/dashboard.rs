@@ -189,6 +189,10 @@ impl Dashboard {
             dashboard.focus_buffer = None;
         }
 
+        if !config.sidebar.restore_on_launch {
+            dashboard.buffers.clear();
+        }
+
         let (mut dashboard, task) =
             Dashboard::from_data(dashboard, config, main_window);
 
@@ -1640,24 +1644,6 @@ impl Dashboard {
                         &server,
                         subcommand,
                         TokenPriority::High,
-                    );
-                }
-                client::Message::ChatHistoryTargetsTimestampUpdated(
-                    server,
-                    timestamp,
-                    Ok(()),
-                ) => {
-                    log::debug!(
-                        "updated targets timestamp for {server} to {timestamp}"
-                    );
-                }
-                client::Message::ChatHistoryTargetsTimestampUpdated(
-                    server,
-                    timestamp,
-                    Err(error),
-                ) => {
-                    log::warn!(
-                        "failed to update targets timestamp for {server} to {timestamp}: {error}"
                     );
                 }
                 client::Message::RequestNewerChatHistory(
@@ -3525,7 +3511,10 @@ impl Dashboard {
                 );
                 let input = data::Input::from_command(buffer.clone(), command);
 
-                if let Some(encoded) = input.encoded() {
+                if !self
+                    .is_unjoined_restored_channel(clients, &server, &channel)
+                    && let Some(encoded) = input.encoded()
+                {
                     clients.send_from_buffer(
                         &buffer,
                         encoded,
@@ -3605,7 +3594,10 @@ impl Dashboard {
                 let command = command::Irc::Part(channel.to_string(), reason);
                 let input = data::Input::from_command(buffer.clone(), command);
 
-                if let Some(encoded) = input.encoded() {
+                if !self
+                    .is_unjoined_restored_channel(clients, &server, &channel)
+                    && let Some(encoded) = input.encoded()
+                {
                     clients.send_from_buffer(
                         &buffer,
                         encoded,
@@ -4206,17 +4198,6 @@ impl Dashboard {
             .map(|task| Task::perform(task, Message::Client))
     }
 
-    pub fn overwrite_chathistory_targets_timestamp(
-        &self,
-        clients: &data::client::Map,
-        server: &Server,
-        timestamp: DateTime<Utc>,
-    ) -> Option<Task<Message>> {
-        clients
-            .overwrite_chathistory_targets_timestamp(server, timestamp)
-            .map(|task| Task::perform(task, Message::Client))
-    }
-
     pub fn get_focused(&self) -> Option<(window::Id, pane_grid::Pane, &Pane)> {
         let Focus { window, pane } = self.focus;
         self.panes
@@ -4254,6 +4235,23 @@ impl Dashboard {
 
     pub fn get_unique_queries(&self, server: &Server) -> Vec<&target::Query> {
         self.history.get_unique_queries(server)
+    }
+
+    fn is_unjoined_restored_channel(
+        &self,
+        clients: &data::client::Map,
+        server: &Server,
+        channel: &target::Channel,
+    ) -> bool {
+        !clients.contains_channel(server, channel)
+            && self
+                .history
+                .restored_channels(server)
+                .any(|restored| restored == channel)
+    }
+
+    pub fn server_disconnected(&mut self, server: &Server) {
+        self.history.server_disconnected(server);
     }
 
     pub fn add_to_sidebar(&mut self, server: Server, query: target::Query) {
@@ -4638,6 +4636,13 @@ impl Dashboard {
             })
             .flatten();
 
+        if self
+            .history
+            .update_saved_buffers(clients, config.sidebar.restore_on_launch)
+        {
+            self.last_changed = Some(now);
+        }
+
         if let Some(last_changed) = self.last_changed
             && now.duration_since(last_changed) >= SAVE_AFTER
         {
@@ -4959,6 +4964,14 @@ impl Dashboard {
 
         let mut tasks = vec![sidebar_task.map(Message::Sidebar)];
 
+        tasks.extend(
+            dashboard
+                .history
+                .restore_saved_buffers(data.buffers, &config.servers)
+                .into_iter()
+                .map(|task| Task::perform(task, Message::History)),
+        );
+
         for pane in data.popout_panes {
             // Popouts are only a single pane
             let Configuration::Pane(pane) = configuration(
@@ -5205,6 +5218,13 @@ impl Dashboard {
         .for_each(|kind| {
             mark_as_read(kind, &mut self.history, clients, TokenPriority::High);
         });
+
+        if self
+            .history
+            .update_saved_buffers(clients, config.sidebar.restore_on_launch)
+        {
+            self.last_changed = Some(Instant::now());
+        }
 
         let history = self
             .history
@@ -5661,6 +5681,7 @@ impl<'a> From<&'a Dashboard> for data::Dashboard {
             } else {
                 data::dashboard::Sidebar::Visible
             },
+            buffers: dashboard.history.saved_buffers(),
         }
     }
 }
@@ -5777,9 +5798,22 @@ fn all_upstream_buffers(
         .connected_servers()
         .flat_map(|server| {
             std::iter::once(buffer::Upstream::Server(server.clone()))
-                .chain(clients.get_channels(server).map(|channel| {
-                    buffer::Upstream::Channel(server.clone(), channel.clone())
-                }))
+                .chain(
+                    clients
+                        .client(server)
+                        .into_iter()
+                        .flat_map(|client| {
+                            client.sidebar_channels(
+                                history.restored_channels(server),
+                            )
+                        })
+                        .map(|channel| {
+                            buffer::Upstream::Channel(
+                                server.clone(),
+                                channel.clone(),
+                            )
+                        }),
+                )
                 .chain(history.get_unique_queries(server).into_iter().map(
                     |nick| {
                         buffer::Upstream::Query(server.clone(), nick.clone())

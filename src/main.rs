@@ -875,6 +875,8 @@ impl Halloy {
                         return Task::none();
                     };
 
+                    dashboard.server_disconnected(&server);
+
                     dashboard.process_server_inputs_completion_and_notice(
                         &server,
                         &self.clients,
@@ -2056,18 +2058,6 @@ fn handle_client_events(
                         )
                         .map(Message::Dashboard),
                 );
-            }
-            Event::ChatHistoryTargetsReceived(server_time) => {
-                if let Some(command) = dashboard
-                    .overwrite_chathistory_targets_timestamp(
-                        clients,
-                        server,
-                        server_time,
-                    )
-                    .map(|cmd| cmd.map(Message::Dashboard))
-                {
-                    commands.push(command);
-                }
             }
             Event::DirectMessage(encoded, our_nick, user) => {
                 handle_direct_message(
