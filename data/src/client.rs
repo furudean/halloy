@@ -596,11 +596,9 @@ impl Client {
     }
 
     fn join(&mut self, channels: &[target::Channel]) {
-        let keys = HashMap::new();
-
         let messages = group_joins(
             channels,
-            &keys,
+            &self.config.channel_keys,
             find_target_limit(&self.isupport, "JOIN"),
         )
         .map(Into::into)
@@ -4226,6 +4224,10 @@ impl Client {
         self.chanmap
             .keys()
             .merge_by(unjoined, move |a, b| compare(a, b).is_le())
+    }
+
+    pub fn is_joined(&self, channel: &target::Channel) -> bool {
+        self.chanmap.contains_key(channel)
     }
 
     pub fn channel_muted(&self, channel: &target::Channel) -> bool {

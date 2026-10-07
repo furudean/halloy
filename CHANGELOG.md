@@ -5,7 +5,8 @@ Added:
 - Added `buffer.text_input.upload_long_paste` to automatically use filehost in case pasted text is too long
 - Right-clickable text in the server buffer now offers a context menu
 - Added `sidebar.restore_on_launch`. When enabled, buffers that were in the
-  sidebar during the last session will be restored.
+  sidebar during the last session will be restored in a disconnected state.
+- Disconnected channels are styled
 
 Fixed:
 

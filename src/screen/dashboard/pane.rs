@@ -85,6 +85,22 @@ impl Pane {
                 };
 
                 let server = &state.server;
+                let not_joined =
+                    !clients.contains_channel(server, &state.target);
+
+                let state_text = not_joined.then(|| {
+                    container(
+                        text("(Disconnected)")
+                            .style(theme::text::secondary)
+                            .font_maybe(
+                                theme::font_style::secondary(theme)
+                                    .map(font::get),
+                            )
+                            .wrapping(Wrapping::None),
+                    )
+                    .padding(Padding::default().left(5))
+                });
+
                 row![
                     text(display_channel)
                         .style(theme::text::url)
@@ -93,6 +109,7 @@ impl Pane {
                         )
                         .wrapping(Wrapping::None)
                         .ellipsis(text::Ellipsis::End),
+                    state_text,
                     if let Some(mode) =
                         clients.get_channel_mode(&state.server, &state.target)
                     {
@@ -108,7 +125,7 @@ impl Pane {
                         text(format!(" @ {server}"))
                             .wrapping(Wrapping::None)
                             .ellipsis(text::Ellipsis::End)
-                    }
+                    },
                 ]
                 .into()
             }

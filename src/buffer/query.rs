@@ -158,6 +158,7 @@ pub fn view<'a>(
         input_view::view(
             &state.input_view,
             our_user.as_ref(),
+            false,
             None,
             &state.server,
             registry,

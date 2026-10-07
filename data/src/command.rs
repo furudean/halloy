@@ -2124,7 +2124,7 @@ pub enum Error {
     Disconnected,
     #[error("already connected to server")]
     Connected,
-    #[error("not in channel")]
+    #[error("not in channel (try /join)")]
     NotInChannel,
     #[error("invalid {command} subcommand")]
     InvalidSubcommand {

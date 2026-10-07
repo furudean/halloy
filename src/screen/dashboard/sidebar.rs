@@ -1,5 +1,6 @@
 use std::{convert, iter};
 
+use data::appearance::theme::FontStyle;
 use data::buffer::{Buffer, BufferRef};
 use data::config::server::SidebarVisibility;
 use data::config::sidebar::{InternalBuffer, PrimaryIcon};
@@ -38,6 +39,7 @@ pub enum Message {
     Close(window::Id, pane_grid::Pane),
     Swap(window::Id, pane_grid::Pane),
     Detach(buffer::Upstream),
+    Join(buffer::Upstream),
     Leave(buffer::Upstream),
     CloseAllQueries(Server, Vec<target::Query>),
     ToggleCommandBar,
@@ -71,6 +73,7 @@ pub enum Event {
     Close(window::Id, pane_grid::Pane),
     Swap(window::Id, pane_grid::Pane),
     Detach(buffer::Upstream),
+    Join(buffer::Upstream),
     Leave(buffer::Upstream),
     CloseAllQueries(Server, Vec<target::Query>),
     ToggleCommandBar,
@@ -279,7 +282,7 @@ impl Sidebar {
                         for channel in connection
                             .sidebar_channels(history.unjoined_channels(server))
                         {
-                            if let Some(buffer_data) = upstream_buffer_data(
+                            if let Some(mut buffer_data) = upstream_buffer_data(
                                 buffer::Upstream::Channel(
                                     server.clone(),
                                     channel.clone(),
@@ -291,6 +294,8 @@ impl Sidebar {
                                 connection.channel_muted(channel),
                                 casemapping,
                             ) {
+                                buffer_data.not_joined =
+                                    !connection.is_joined(channel);
                                 collapsible_buffers.push(buffer_data);
                             }
                         }
@@ -451,6 +456,7 @@ impl Sidebar {
             Message::Detach(buffer) => {
                 (Task::none(), Some(Event::Detach(buffer)))
             }
+            Message::Join(buffer) => (Task::none(), Some(Event::Join(buffer))),
             Message::Leave(buffer) => {
                 (Task::none(), Some(Event::Leave(buffer)))
             }
@@ -895,6 +901,7 @@ impl Sidebar {
                                 buffer: buffer_data.buffer,
                                 kind: buffer_data.kind,
                                 indicators: buffer_data.indicators,
+                                not_joined: buffer_data.not_joined,
                                 connection_status,
                                 server_has_collapsible_buffers:
                                     has_collapsible_buffers,
@@ -1076,6 +1083,7 @@ struct UpstreamBufferSidebarData {
     #[expect(dead_code)] // TODO: Cycle highlights
     has_highlight: bool,
     indicators: IndicatorState,
+    not_joined: bool,
 }
 
 impl UpstreamBufferSidebarData {
@@ -1140,6 +1148,7 @@ impl UpstreamBufferSidebarData {
             has_unread,
             has_highlight,
             indicators,
+            not_joined: false,
         })
     }
 
@@ -1307,6 +1316,7 @@ enum Entry {
     Replace,
     Swap(window::Id, pane_grid::Pane),
     Detach,
+    Join,
     Leave,
     Remove,
     ToggleCollapse,
@@ -1321,6 +1331,7 @@ impl Entry {
         connection_status: Option<ConnectionStatus>,
         supports_detach: bool,
         has_history: bool,
+        not_joined: bool,
     ) -> Vec<Self> {
         use Entry::*;
 
@@ -1373,7 +1384,9 @@ impl Entry {
         });
 
         if connected {
-            if matches!(
+            if not_joined {
+                entries.push(Join);
+            } else if matches!(
                 buffer,
                 buffer::Buffer::Upstream(buffer::Upstream::Channel(_, _))
             ) && supports_detach
@@ -1418,6 +1431,7 @@ struct UpstreamButtonContext<'a> {
     buffer: buffer::Upstream,
     kind: history::Kind,
     indicators: IndicatorState,
+    not_joined: bool,
     connection_status: ConnectionStatus,
     server_has_collapsible_buffers: bool,
     server_has_unread: bool,
@@ -1542,6 +1556,7 @@ fn upstream_buffer_button<'a>(
         buffer,
         kind,
         indicators,
+        not_joined,
         connection_status,
         server_has_collapsible_buffers,
         casemapping,
@@ -1587,6 +1602,8 @@ fn upstream_buffer_button<'a>(
         theme::text::highlight_indicator
     } else if show_unread_title {
         theme::text::unread_indicator
+    } else if *not_joined {
+        theme::text::secondary
     } else if let ConnectionStatus::Disconnected { connecting, .. } =
         &connection_status
         && !*connecting
@@ -1600,7 +1617,14 @@ fn upstream_buffer_button<'a>(
         theme::text::primary
     };
 
-    let buffer_title_font = theme::font_style::primary(theme).map(font::get);
+    let buffer_title_font = if *not_joined {
+        Some(font::get(
+            theme::font_style::secondary(theme).unwrap_or_default()
+                + FontStyle::Italic,
+        ))
+    } else {
+        theme::font_style::primary(theme).map(font::get)
+    };
 
     let dimensions = Dimensions::from(&config.sidebar);
 
@@ -1827,6 +1851,7 @@ fn upstream_buffer_context_menu<'a>(
         panes,
         focus,
         buffer,
+        not_joined,
         connection_status,
         server_has_unread,
         supports_detach,
@@ -1845,6 +1870,7 @@ fn upstream_buffer_context_menu<'a>(
         Some(connection_status),
         supports_detach,
         true,
+        not_joined,
     );
 
     if entries.is_empty() {
@@ -1923,9 +1949,15 @@ fn upstream_buffer_context_menu<'a>(
                     "Detach from channel",
                     Some(Message::Detach(buffer.clone())),
                 ),
+                Entry::Join => {
+                    ("Join channel", Some(Message::Join(buffer.clone())))
+                }
                 Entry::Leave => (
                     match &buffer {
                         buffer::Upstream::Server(_) => "Disconnect from server",
+                        buffer::Upstream::Channel(_, _) if not_joined => {
+                            "Close channel"
+                        }
                         buffer::Upstream::Channel(_, _) => "Leave channel",
                         buffer::Upstream::Query(_, _) => "Close query",
                     },
@@ -2223,6 +2255,7 @@ fn internal_buffer_button<'a>(
         None,
         false,
         kind.is_some(),
+        false,
     );
 
     if entries.is_empty() {

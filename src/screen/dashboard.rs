@@ -720,6 +720,15 @@ impl Dashboard {
                             (Task::none(), None)
                         }
                     }
+                    sidebar::Event::Join(buffer) => {
+                        if let buffer::Upstream::Channel(server, channel) =
+                            buffer
+                        {
+                            clients.join(&server, slice::from_ref(&channel));
+                        }
+
+                        (Task::none(), None)
+                    }
                     sidebar::Event::Leave(buffer) => {
                         self.leave_buffer(clients, config, buffer)
                     }

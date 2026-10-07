@@ -216,6 +216,7 @@ fn paste_key_binding(
 pub fn view<'a>(
     state: &'a State,
     our_user: Option<&User>,
+    not_joined: bool,
     channel_users: Option<&'a ChannelUsers>,
     server: &'a Server,
     registry: &'a dyn metadata::Registry,
@@ -505,7 +506,9 @@ pub fn view<'a>(
 
     let input_row = container(
         row![]
-            .extend(maybe_our_user(our_user, registry, config, theme))
+            .extend(maybe_our_user(
+                our_user, not_joined, registry, config, theme,
+            ))
             .push(wrapped_input)
             .extend(maybe_upload_spinner.into_iter().chain(maybe_upload_button))
             .spacing(INPUT_ROW_SPACING)
@@ -560,7 +563,9 @@ pub fn view<'a>(
 
         let overlay = double_pass(
             row![]
-                .extend(maybe_our_user(our_user, registry, config, theme))
+                .extend(maybe_our_user(
+                    our_user, not_joined, registry, config, theme,
+                ))
                 .push(overlay())
                 .spacing(INPUT_ROW_SPACING),
             row![Space::new().width(Length::Fill), overlay()],
@@ -581,6 +586,7 @@ pub fn view<'a>(
 
 fn maybe_our_user<'a>(
     our_user: Option<&User>,
+    not_joined: bool,
     registry: &'a dyn metadata::Registry,
     config: &'a Config,
     theme: &'a Theme,
@@ -604,7 +610,7 @@ fn maybe_our_user<'a>(
                 vec![
                     container(user_display.into_element(
                         user,
-                        user.is_away(),
+                        user.is_away() || not_joined,
                         false,
                         None,
                         None,
