@@ -2001,6 +2001,9 @@ fn handle_client_events(
                         .map(Message::Dashboard),
                 );
             }
+            Event::LeftChannel(channel) => {
+                dashboard.left_channel(server.clone(), channel);
+            }
             Event::JoinedChannel(channel, server_time) => {
                 commands.push(
                     dashboard

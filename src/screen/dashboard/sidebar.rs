@@ -277,7 +277,7 @@ impl Sidebar {
 
                         // Channels from the connected server.
                         for channel in connection
-                            .sidebar_channels(history.restored_channels(server))
+                            .sidebar_channels(history.unjoined_channels(server))
                         {
                             if let Some(buffer_data) = upstream_buffer_data(
                                 buffer::Upstream::Channel(

@@ -51,19 +51,7 @@ impl TargetsTimestamps {
 
             self.written.insert(server.clone(), timestamp);
 
-            tasks.push(
-                async move {
-                    let result =
-                        client::overwrite_chathistory_targets_timestamp(
-                            server.clone(),
-                            timestamp,
-                        )
-                        .await;
-
-                    Message::TargetsTimestampUpdated(server, timestamp, result)
-                }
-                .boxed(),
-            );
+            tasks.push(write(server, timestamp));
         }
 
         tasks
@@ -72,13 +60,49 @@ impl TargetsTimestamps {
     pub fn exit(
         &mut self,
         clients: &client::Map,
-    ) -> Vec<(Server, DateTime<Utc>)> {
+    ) -> Vec<BoxFuture<'static, Message>> {
         clients
             .chathistory_targets_timestamps()
             .into_iter()
             .filter(|(server, timestamp)| {
                 self.written.get(server) != Some(timestamp)
             })
+            .map(|(server, timestamp)| write(server, timestamp))
             .collect()
+    }
+}
+
+fn write(
+    server: Server,
+    timestamp: DateTime<Utc>,
+) -> BoxFuture<'static, Message> {
+    async move {
+        let result = client::overwrite_chathistory_targets_timestamp(
+            server.clone(),
+            timestamp,
+        )
+        .await;
+
+        Message::TargetsTimestampUpdated(server, timestamp, result)
+    }
+    .boxed()
+}
+
+pub fn log_updated(
+    server: &Server,
+    timestamp: DateTime<Utc>,
+    result: &Result<(), client::Error>,
+) {
+    match result {
+        Ok(()) => {
+            log::debug!(
+                "updated targets timestamp for {server} to {timestamp}"
+            );
+        }
+        Err(error) => {
+            log::warn!(
+                "failed to update targets timestamp for {server} to {timestamp}: {error}"
+            );
+        }
     }
 }

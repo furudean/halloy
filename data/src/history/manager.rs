@@ -11,7 +11,7 @@ use tokio::time::Instant;
 use super::filter::{Filter, FilterChain};
 use super::reroute::RerouteRules;
 use super::saved_buffers::SavedBuffers;
-use super::targets_timestamps::TargetsTimestamps;
+use super::targets_timestamps::{self, TargetsTimestamps};
 use crate::capabilities::LabeledResponseContext;
 use crate::history::{self, History, MessageReferences, ReadMarker, metadata};
 use crate::message::broadcast::{self, Broadcast};
@@ -374,15 +374,8 @@ impl Manager {
             Message::EchoEvents(server, events) => {
                 return Some(Event::EchoEvents(server, events));
             }
-            Message::TargetsTimestampUpdated(server, timestamp, Ok(())) => {
-                log::debug!(
-                    "updated targets timestamp for {server} to {timestamp}"
-                );
-            }
-            Message::TargetsTimestampUpdated(server, timestamp, Err(error)) => {
-                log::warn!(
-                    "failed to update targets timestamp for {server} to {timestamp}: {error}"
-                );
+            Message::TargetsTimestampUpdated(server, timestamp, result) => {
+                targets_timestamps::log_updated(&server, timestamp, &result);
             }
         }
 
@@ -491,19 +484,22 @@ impl Manager {
                     .map(move |result| (kind, result))
             });
 
-            let results = future::join_all(tasks).await;
-            input::save_drafts(drafts).await;
+            let (results, (), updated) = future::join3(
+                future::join_all(tasks),
+                input::save_drafts(drafts),
+                future::join_all(targets_timestamps),
+            )
+            .await;
 
-            for (server, timestamp) in targets_timestamps {
-                if let Err(error) =
-                    client::overwrite_chathistory_targets_timestamp(
-                        server.clone(),
-                        timestamp,
-                    )
-                    .await
+            for message in updated {
+                if let Message::TargetsTimestampUpdated(
+                    server,
+                    timestamp,
+                    result,
+                ) = message
                 {
-                    log::warn!(
-                        "failed to update targets timestamp for {server} to {timestamp}: {error}"
+                    targets_timestamps::log_updated(
+                        &server, timestamp, &result,
                     );
                 }
             }
@@ -962,11 +958,15 @@ impl Manager {
         self.saved_buffers.to_vec()
     }
 
-    pub fn restored_channels(
+    pub fn unjoined_channels(
         &self,
         server: &Server,
     ) -> impl Iterator<Item = &target::Channel> {
-        self.saved_buffers.restored_channels(server)
+        self.saved_buffers.unjoined_channels(server)
+    }
+
+    pub fn left_channel(&mut self, server: Server, channel: target::Channel) {
+        self.saved_buffers.left(server, channel);
     }
 
     pub fn server_disconnected(&mut self, server: &Server) {

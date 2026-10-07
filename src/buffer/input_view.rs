@@ -2220,21 +2220,39 @@ impl State {
                             casemapping,
                         );
 
-                        let event = has_channel_argument.then_some({
+                        let event = has_channel_argument.then(|| {
                             let buffer_action = match buffer {
-                                // If it's a channel, we want to replace it when hopping to a new channel.
                                 Upstream::Channel(..) => {
                                     BufferAction::ReplacePane
                                 }
-                                // If it's a server or query, we want to follow config for actions.
                                 Upstream::Server(..) | Upstream::Query(..) => {
                                     config.actions.buffer.message_channel
                                 }
                             };
 
-                            Event::OpenBuffers {
-                                server: buffer.server().clone(),
-                                targets: vec![(target, buffer_action)],
+                            // The replaced channel is closed, so its PART does
+                            // not keep it open.
+                            let history_task = buffer
+                                .channel()
+                                .filter(|channel| {
+                                    target.as_channel() != Some(*channel)
+                                })
+                                .and_then(|channel| {
+                                    history.close(
+                                        history::Kind::Channel(
+                                            buffer.server().clone(),
+                                            channel.clone(),
+                                        ),
+                                        clients,
+                                        &config.buffer.server_messages,
+                                    )
+                                })
+                                .map_or_else(Task::none, Task::future);
+
+                            Event::InputSent {
+                                history_task,
+                                open_buffers: vec![(target, buffer_action)],
+                                was_join_command: false,
                             }
                         });
 

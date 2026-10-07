@@ -174,6 +174,7 @@ pub enum Event {
     FileTransferRequest(file_transfer::ReceiveRequest),
     UpdateReadMarker(Target, ReadMarker),
     JoinedChannel(target::Channel, DateTime<Utc>),
+    LeftChannel(target::Channel),
     LoggedIn(DateTime<Utc>),
     AddedIsupportParam(isupport::Parameter),
     ChatHistoryTargetReceived(Target, DateTime<Utc>),
@@ -1051,6 +1052,8 @@ impl Client {
                 })?
             };
         }
+
+        let mut left_channel = None;
 
         match &message.command {
             Command::BATCH(batch, params) => {
@@ -1981,9 +1984,12 @@ impl Client {
                         self.casemapping(),
                     ));
 
-                    self.chanmap.shift_remove(&target_channel);
+                    let parted =
+                        self.chanmap.shift_remove(&target_channel).is_some();
 
                     self.who_queue.parted_channel(&target_channel);
+
+                    left_channel = parted.then_some(target_channel);
                 } else if let Some(channel) =
                     self.chanmap.get_mut(&context!(target::Channel::parse(
                         channel,
@@ -2078,17 +2084,18 @@ impl Client {
                     if casemapping.normalize(victim)
                         == self.nickname().as_normalized_str()
                     {
-                        self.chanmap.shift_remove(&channel);
+                        let kicked =
+                            self.chanmap.shift_remove(&channel).is_some();
 
                         let (server_time, received_with_server_time) =
                             message.server_time_or_now();
 
-                        return Ok(vec![
+                        let mut events = vec![
                             Event::Broadcast(Broadcast::Kick {
                                 kicker: ok!(message.user(casemapping)),
                                 victim: User::from(self.nickname().to_owned()),
                                 reason: reason.clone(),
-                                channel,
+                                channel: channel.clone(),
                                 server_time,
                                 received_with_server_time,
                             }),
@@ -2097,7 +2104,13 @@ impl Client {
                                 our_nick: self.nickname().to_owned(),
                                 deduplicate: false,
                             },
-                        ]);
+                        ];
+
+                        if kicked {
+                            events.push(Event::LeftChannel(channel));
+                        }
+
+                        return Ok(events);
                     } else if let Some(channel) = self.chanmap.get_mut(&channel)
                     {
                         channel.users.remove(&User::from(Nick::from_str(
@@ -3528,22 +3541,26 @@ impl Client {
             _ => {}
         }
 
-        if let Some(target) =
+        let event = if let Some(target) =
             context.map(Context::buffer).as_ref().map(Destination::from)
         {
-            Ok(vec![Event::WithTarget {
+            Event::WithTarget {
                 message,
                 our_nick: self.nickname().to_owned(),
                 target,
                 deduplicate: false,
-            }])
+            }
         } else {
-            Ok(vec![Event::Single {
+            Event::Single {
                 message,
                 our_nick: self.nickname().to_owned(),
                 deduplicate: false,
-            }])
-        }
+            }
+        };
+
+        Ok(iter::once(event)
+            .chain(left_channel.map(Event::LeftChannel))
+            .collect())
     }
 
     fn handle_chathistory(
@@ -4187,7 +4204,7 @@ impl Client {
 
     pub fn sidebar_channels<'a>(
         &'a self,
-        restored: impl Iterator<Item = &'a target::Channel>,
+        unjoined: impl Iterator<Item = &'a target::Channel>,
     ) -> impl Iterator<Item = &'a target::Channel> {
         let casemapping = self.casemapping();
         let chantypes = self.chantypes();
@@ -4202,13 +4219,13 @@ impl Client {
             )
         };
 
-        let restored = restored
+        let unjoined = unjoined
             .filter(|channel| !self.chanmap.contains_key(*channel))
             .sorted_by(compare);
 
         self.chanmap
             .keys()
-            .merge_by(restored, move |a, b| compare(a, b).is_le())
+            .merge_by(unjoined, move |a, b| compare(a, b).is_le())
     }
 
     pub fn channel_muted(&self, channel: &target::Channel) -> bool {
@@ -4855,6 +4872,7 @@ fn continue_chathistory_between(
             | Event::FileTransferRequest(_)
             | Event::UpdateReadMarker(_, _)
             | Event::JoinedChannel(_, _)
+            | Event::LeftChannel(_)
             | Event::LoggedIn(_)
             | Event::AddedIsupportParam(_)
             | Event::ChatHistoryTargetReceived(_, _)
@@ -4904,6 +4922,7 @@ fn continue_chathistory_targets(
             | Event::FileTransferRequest(_)
             | Event::UpdateReadMarker(_, _)
             | Event::JoinedChannel(_, _)
+            | Event::LeftChannel(_)
             | Event::LoggedIn(_)
             | Event::AddedIsupportParam(_)
             | Event::MonitoredOnline(_)
