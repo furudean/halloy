@@ -105,14 +105,6 @@ pub enum Broadcast {
         server_time: DateTime<Utc>,
         received_with_server_time: bool,
     },
-    Kick {
-        kicker: User,
-        victim: User,
-        reason: Option<String>,
-        channel: target::Channel,
-        server_time: DateTime<Utc>,
-        received_with_server_time: bool,
-    },
 }
 
 #[derive(Debug)]
@@ -2063,7 +2055,7 @@ impl Client {
                     channel.users.insert(user);
                 }
             }
-            Command::KICK(channel, victim, reason) => {
+            Command::KICK(channel, victim, _) => {
                 let casemapping = self.casemapping();
 
                 if let Ok(channel) = target::Channel::parse(
@@ -2078,24 +2070,11 @@ impl Client {
                         let kicked =
                             self.chanmap.shift_remove(&channel).is_some();
 
-                        let (server_time, received_with_server_time) =
-                            message.server_time_or_now();
-
-                        let mut events = vec![
-                            Event::Broadcast(Broadcast::Kick {
-                                kicker: ok!(message.user(casemapping)),
-                                victim: User::from(self.nickname().to_owned()),
-                                reason: reason.clone(),
-                                channel: channel.clone(),
-                                server_time,
-                                received_with_server_time,
-                            }),
-                            Event::Single {
-                                message,
-                                our_nick: self.nickname().to_owned(),
-                                deduplicate: false,
-                            },
-                        ];
+                        let mut events = vec![Event::Single {
+                            message,
+                            our_nick: self.nickname().to_owned(),
+                            deduplicate: false,
+                        }];
 
                         if kicked {
                             events.push(Event::LeftChannel(channel));

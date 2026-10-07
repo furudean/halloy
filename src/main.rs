@@ -2666,27 +2666,6 @@ fn handle_broadcast(
                 casemapping,
             },
         ),
-        data::client::Broadcast::Kick {
-            kicker,
-            victim,
-            reason,
-            channel,
-            server_time,
-            received_with_server_time,
-        } => dashboard.broadcast(
-            server,
-            casemapping,
-            config,
-            server_time,
-            received_with_server_time,
-            Broadcast::Kick {
-                kicker,
-                victim,
-                reason,
-                channel,
-                casemapping,
-            },
-        ),
     };
 
     commands.push(task.map(Message::Dashboard));
