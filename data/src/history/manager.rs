@@ -958,14 +958,14 @@ impl Manager {
         self.saved_buffers.to_vec()
     }
 
-    pub fn unjoined_channels(
+    pub fn disconnected_channels(
         &self,
         server: &Server,
     ) -> impl Iterator<Item = &target::Channel> {
-        self.saved_buffers.unjoined_channels(server)
+        self.saved_buffers.disconnected_channels(server)
     }
 
-    pub fn is_unjoined_channel(
+    pub fn is_disconnected_channel(
         &self,
         clients: &client::Map,
         server: &Server,
@@ -973,16 +973,20 @@ impl Manager {
     ) -> bool {
         !clients.contains_channel(server, channel)
             && self
-                .unjoined_channels(server)
-                .any(|unjoined| unjoined == channel)
+                .disconnected_channels(server)
+                .any(|disconnected| disconnected == channel)
     }
 
     pub fn left_channel(&mut self, server: Server, channel: target::Channel) {
         self.saved_buffers.left(server, channel);
     }
 
-    pub fn server_disconnected(&mut self, server: &Server) {
-        self.saved_buffers.disconnected(server);
+    pub fn server_disconnected(
+        &mut self,
+        server: &Server,
+        clients: &client::Map,
+    ) {
+        self.saved_buffers.server_disconnected(server, clients);
     }
 
     pub fn restore_saved_buffers(

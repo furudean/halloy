@@ -3520,7 +3520,9 @@ impl Dashboard {
                 );
                 let input = data::Input::from_command(buffer.clone(), command);
 
-                if !self.history.is_unjoined_channel(clients, &server, &channel)
+                if !self
+                    .history
+                    .is_disconnected_channel(clients, &server, &channel)
                     && let Some(encoded) = input.encoded()
                 {
                     clients.send_from_buffer(
@@ -3602,7 +3604,9 @@ impl Dashboard {
                 let command = command::Irc::Part(channel.to_string(), reason);
                 let input = data::Input::from_command(buffer.clone(), command);
 
-                if !self.history.is_unjoined_channel(clients, &server, &channel)
+                if !self
+                    .history
+                    .is_disconnected_channel(clients, &server, &channel)
                     && let Some(encoded) = input.encoded()
                 {
                     clients.send_from_buffer(
@@ -4248,8 +4252,13 @@ impl Dashboard {
         self.history.left_channel(server, channel);
     }
 
-    pub fn server_disconnected(&mut self, server: &Server) {
-        self.history.server_disconnected(server);
+    // Must be called before the server's client is dropped.
+    pub fn server_disconnected(
+        &mut self,
+        server: &Server,
+        clients: &data::client::Map,
+    ) {
+        self.history.server_disconnected(server, clients);
     }
 
     pub fn add_to_sidebar(&mut self, server: Server, query: target::Query) {
@@ -5802,7 +5811,7 @@ fn all_upstream_buffers(
                         .into_iter()
                         .flat_map(|client| {
                             client.sidebar_channels(
-                                history.unjoined_channels(server),
+                                history.disconnected_channels(server),
                             )
                         })
                         .map(|channel| {

@@ -14,13 +14,13 @@ struct Buffers {
 #[derive(Debug, Default)]
 pub struct SavedBuffers {
     buffers: HashMap<Server, Buffers>,
-    // Holds restored channels that are not joined yet. Restoring a channel
-    // does not join it.
-    restored_channels: HashMap<Server, HashSet<target::Channel>>,
+    // Holds the channels shown in the sidebar while disconnected from them,
+    // whether restored (restoring a channel does not join it), left, or
+    // dropped with their server's connection.
+    disconnected: HashMap<Server, HashSet<target::Channel>>,
     // Holds the channels joined on each server's current connection.
     joined: HashMap<Server, HashSet<target::Channel>>,
     closing: HashMap<Server, HashSet<target::Channel>>,
-    left: HashMap<Server, HashSet<target::Channel>>,
     changed: bool,
     exited: bool,
 }
@@ -33,10 +33,7 @@ impl SavedBuffers {
             Target::Channel(channel) => {
                 buffers.channels.insert(channel.clone());
 
-                self.restored_channels
-                    .entry(server)
-                    .or_default()
-                    .insert(channel);
+                self.disconnected.entry(server).or_default().insert(channel);
             }
             Target::Query(query) => {
                 buffers.queries.insert(query);
@@ -44,20 +41,11 @@ impl SavedBuffers {
         }
     }
 
-    pub fn unjoined_channels(
+    pub fn disconnected_channels(
         &self,
         server: &Server,
     ) -> impl Iterator<Item = &target::Channel> {
-        let restored = self.restored_channels.get(server);
-
-        restored.into_iter().flatten().chain(
-            self.left.get(server).into_iter().flatten().filter(
-                move |channel| {
-                    !restored
-                        .is_some_and(|restored| restored.contains(*channel))
-                },
-            ),
-        )
+        self.disconnected.get(server).into_iter().flatten()
     }
 
     pub fn left(&mut self, server: Server, channel: target::Channel) {
@@ -69,16 +57,12 @@ impl SavedBuffers {
             return;
         }
 
-        self.left.entry(server).or_default().insert(channel);
+        self.disconnected.entry(server).or_default().insert(channel);
     }
 
     pub fn close(&mut self, kind: &history::Kind) {
         if let history::Kind::Channel(server, channel) = kind {
-            if let Some(channels) = self.restored_channels.get_mut(server) {
-                channels.remove(channel);
-            }
-
-            if let Some(channels) = self.left.get_mut(server) {
+            if let Some(channels) = self.disconnected.get_mut(server) {
                 channels.remove(channel);
             }
 
@@ -99,10 +83,34 @@ impl SavedBuffers {
         }
     }
 
-    // Resets join tracking, so a reconnect is never mistaken for parts.
-    pub fn disconnected(&mut self, server: &Server) {
+    // Marks the server's joined channels as disconnected, so they stay in the
+    // sidebar, and resets join tracking, so a reconnect is never mistaken for
+    // parts. Must be called before the server's client is dropped.
+    pub fn server_disconnected(
+        &mut self,
+        server: &Server,
+        clients: &client::Map,
+    ) {
+        let closing = self.closing.remove(server);
+
+        let channels = clients
+            .get_channels(server)
+            .filter(|channel| {
+                !closing
+                    .as_ref()
+                    .is_some_and(|closing| closing.contains(*channel))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if !channels.is_empty() {
+            self.disconnected
+                .entry(server.clone())
+                .or_default()
+                .extend(channels);
+        }
+
         self.joined.remove(server);
-        self.closing.remove(server);
     }
 
     // Returns true when the saved buffers changed.
@@ -117,12 +125,13 @@ impl SavedBuffers {
             return false;
         }
 
-        for (server, channels) in &mut self.left {
+        // Joined channels are tracked by their client from here on.
+        for (server, channels) in &mut self.disconnected {
             channels
                 .retain(|channel| !clients.contains_channel(server, channel));
         }
 
-        self.left.retain(|_, channels| !channels.is_empty());
+        self.disconnected.retain(|_, channels| !channels.is_empty());
 
         if !restore_on_launch {
             let cleared = self.buffers.values().any(|buffers| {
@@ -130,7 +139,6 @@ impl SavedBuffers {
             });
 
             self.buffers.clear();
-            self.restored_channels.clear();
             self.joined.clear();
             self.changed = false;
             self.prune_closing(clients);
@@ -140,12 +148,6 @@ impl SavedBuffers {
 
         let mut changed = std::mem::take(&mut self.changed);
 
-        // Joined channels are tracked by their client from here on.
-        for (server, channels) in &mut self.restored_channels {
-            channels
-                .retain(|channel| !clients.contains_channel(server, channel));
-        }
-
         self.joined
             .retain(|server, _| clients.get_server_is_connected(server));
 
@@ -153,23 +155,6 @@ impl SavedBuffers {
             .connected_servers()
             .filter(|server| !server.is_bouncer_network())
         {
-            if !self.joined.contains_key(server)
-                && let Some(buffers) = self.buffers.get(server)
-            {
-                self.restored_channels
-                    .entry(server.clone())
-                    .or_default()
-                    .extend(
-                        buffers
-                            .channels
-                            .iter()
-                            .filter(|channel| {
-                                !clients.contains_channel(server, channel)
-                            })
-                            .cloned(),
-                    );
-            }
-
             let joined = self.joined.entry(server.clone()).or_default();
             let saved =
                 &mut self.buffers.entry(server.clone()).or_default().channels;
@@ -195,9 +180,6 @@ impl SavedBuffers {
                 }
             }
         }
-
-        self.restored_channels
-            .retain(|_, channels| !channels.is_empty());
 
         self.prune_closing(clients);
 
@@ -375,6 +357,13 @@ mod tests {
         );
     }
 
+    // Mirrors the app, which marks the server disconnected before dropping
+    // its client.
+    fn disconnect(clients: &mut client::Map, saved: &mut SavedBuffers) {
+        saved.server_disconnected(&server(), clients);
+        clients.disconnected(server(), false);
+    }
+
     fn update(saved: &mut SavedBuffers, clients: &client::Map) -> bool {
         saved.update(std::iter::empty(), clients, true)
     }
@@ -397,32 +386,32 @@ mod tests {
     }
 
     // Counts how often the channel is listed, so the sidebar shows it once.
-    fn times_unjoined(saved: &SavedBuffers, name: &str) -> usize {
+    fn times_disconnected(saved: &SavedBuffers, name: &str) -> usize {
         saved
-            .unjoined_channels(&server())
-            .filter(|unjoined| **unjoined == channel(name))
+            .disconnected_channels(&server())
+            .filter(|disconnected| **disconnected == channel(name))
             .count()
     }
 
     #[test]
-    fn kicked_channel_stays_saved_and_unjoined() {
+    fn kicked_channel_stays_saved_and_disconnected() {
         let mut clients = clients();
         let mut saved = SavedBuffers::default();
 
         join(&mut clients, &mut saved, "#halloy");
         assert!(update(&mut saved, &clients));
         assert!(is_saved(&saved, "#halloy"));
-        assert_eq!(times_unjoined(&saved, "#halloy"), 0);
+        assert_eq!(times_disconnected(&saved, "#halloy"), 0);
 
         kick(&mut clients, &mut saved, "#halloy");
-        assert_eq!(times_unjoined(&saved, "#halloy"), 1);
+        assert_eq!(times_disconnected(&saved, "#halloy"), 1);
         assert!(!update(&mut saved, &clients));
         assert!(is_saved(&saved, "#halloy"));
-        assert_eq!(times_unjoined(&saved, "#halloy"), 1);
+        assert_eq!(times_disconnected(&saved, "#halloy"), 1);
     }
 
     #[test]
-    fn rejoined_channel_is_no_longer_unjoined() {
+    fn rejoined_channel_is_no_longer_disconnected() {
         let mut clients = clients();
         let mut saved = SavedBuffers::default();
 
@@ -434,13 +423,13 @@ mod tests {
         join(&mut clients, &mut saved, "#halloy");
         update(&mut saved, &clients);
         assert!(is_saved(&saved, "#halloy"));
-        assert_eq!(times_unjoined(&saved, "#halloy"), 0);
+        assert_eq!(times_disconnected(&saved, "#halloy"), 0);
 
         // Parting again keeps the buffer open again.
         part(&mut clients, &mut saved, "#halloy");
         update(&mut saved, &clients);
         assert!(is_saved(&saved, "#halloy"));
-        assert_eq!(times_unjoined(&saved, "#halloy"), 1);
+        assert_eq!(times_disconnected(&saved, "#halloy"), 1);
     }
 
     #[test]
@@ -453,18 +442,73 @@ mod tests {
         kick(&mut clients, &mut saved, "#halloy");
         update(&mut saved, &clients);
 
-        clients.disconnected(server(), false);
-        saved.disconnected(&server());
+        disconnect(&mut clients, &mut saved);
         update(&mut saved, &clients);
         connect(&mut clients);
         update(&mut saved, &clients);
 
         assert!(is_saved(&saved, "#halloy"));
-        assert_eq!(times_unjoined(&saved, "#halloy"), 1);
+        assert_eq!(times_disconnected(&saved, "#halloy"), 1);
     }
 
     #[test]
-    fn part_for_untracked_channel_is_not_unjoined() {
+    fn joined_channels_stay_disconnected_with_server() {
+        let mut clients = clients();
+        let mut saved = SavedBuffers::default();
+
+        join(&mut clients, &mut saved, "#halloy");
+        join(&mut clients, &mut saved, "#rust");
+        update(&mut saved, &clients);
+
+        disconnect(&mut clients, &mut saved);
+        assert!(!update(&mut saved, &clients));
+        assert!(is_saved(&saved, "#halloy"));
+        assert!(is_saved(&saved, "#rust"));
+        assert_eq!(times_disconnected(&saved, "#halloy"), 1);
+        assert_eq!(times_disconnected(&saved, "#rust"), 1);
+
+        // Only channels joined again after reconnecting are connected.
+        connect(&mut clients);
+        join(&mut clients, &mut saved, "#halloy");
+        update(&mut saved, &clients);
+        assert!(is_saved(&saved, "#halloy"));
+        assert!(is_saved(&saved, "#rust"));
+        assert_eq!(times_disconnected(&saved, "#halloy"), 0);
+        assert_eq!(times_disconnected(&saved, "#rust"), 1);
+    }
+
+    #[test]
+    fn closing_channel_is_not_disconnected_with_server() {
+        let mut clients = clients();
+        let mut saved = SavedBuffers::default();
+
+        join(&mut clients, &mut saved, "#halloy");
+        update(&mut saved, &clients);
+
+        // The PART is in flight, so the channel is still joined.
+        close(&mut saved, "#halloy");
+        disconnect(&mut clients, &mut saved);
+        update(&mut saved, &clients);
+        assert!(!is_saved(&saved, "#halloy"));
+        assert_eq!(times_disconnected(&saved, "#halloy"), 0);
+    }
+
+    #[test]
+    fn joined_channels_stay_disconnected_when_restore_on_launch_is_disabled() {
+        let mut clients = clients();
+        let mut saved = SavedBuffers::default();
+
+        join(&mut clients, &mut saved, "#halloy");
+        update_disabled(&mut saved, &clients);
+
+        disconnect(&mut clients, &mut saved);
+        update_disabled(&mut saved, &clients);
+        assert!(!is_saved(&saved, "#halloy"));
+        assert_eq!(times_disconnected(&saved, "#halloy"), 1);
+    }
+
+    #[test]
+    fn part_for_untracked_channel_is_not_disconnected() {
         let mut clients = clients();
         let mut saved = SavedBuffers::default();
 
@@ -472,8 +516,8 @@ mod tests {
         kick(&mut clients, &mut saved, "#rust");
         update(&mut saved, &clients);
         assert!(!is_saved(&saved, "#halloy"));
-        assert_eq!(times_unjoined(&saved, "#halloy"), 0);
-        assert_eq!(times_unjoined(&saved, "#rust"), 0);
+        assert_eq!(times_disconnected(&saved, "#halloy"), 0);
+        assert_eq!(times_disconnected(&saved, "#rust"), 0);
     }
 
     #[test]
@@ -488,7 +532,7 @@ mod tests {
         part(&mut clients, &mut saved, "#halloy");
         assert!(update(&mut saved, &clients));
         assert!(!is_saved(&saved, "#halloy"));
-        assert_eq!(times_unjoined(&saved, "#halloy"), 0);
+        assert_eq!(times_disconnected(&saved, "#halloy"), 0);
     }
 
     #[test]
@@ -508,11 +552,11 @@ mod tests {
         part(&mut clients, &mut saved, "#halloy");
         assert!(update(&mut saved, &clients));
         assert!(!is_saved(&saved, "#halloy"));
-        assert_eq!(times_unjoined(&saved, "#halloy"), 0);
+        assert_eq!(times_disconnected(&saved, "#halloy"), 0);
     }
 
     #[test]
-    fn closed_unjoined_channel_is_removed() {
+    fn closed_disconnected_channel_is_removed() {
         let mut clients = clients();
         let mut saved = SavedBuffers::default();
 
@@ -524,7 +568,7 @@ mod tests {
         close(&mut saved, "#halloy");
         assert!(update(&mut saved, &clients));
         assert!(!is_saved(&saved, "#halloy"));
-        assert_eq!(times_unjoined(&saved, "#halloy"), 0);
+        assert_eq!(times_disconnected(&saved, "#halloy"), 0);
 
         // A later join is not mistaken for the closed channel's PART.
         join(&mut clients, &mut saved, "#halloy");
@@ -532,11 +576,11 @@ mod tests {
         kick(&mut clients, &mut saved, "#halloy");
         update(&mut saved, &clients);
         assert!(is_saved(&saved, "#halloy"));
-        assert_eq!(times_unjoined(&saved, "#halloy"), 1);
+        assert_eq!(times_disconnected(&saved, "#halloy"), 1);
     }
 
     #[test]
-    fn left_channels_are_kept_when_restore_on_launch_is_disabled() {
+    fn left_channels_stay_disconnected_when_restore_on_launch_is_disabled() {
         let mut clients = clients();
         let mut saved = SavedBuffers::default();
 
@@ -549,16 +593,16 @@ mod tests {
         assert!(!update_disabled(&mut saved, &clients));
         assert!(!is_saved(&saved, "#halloy"));
         assert!(!is_saved(&saved, "#rust"));
-        assert_eq!(times_unjoined(&saved, "#halloy"), 1);
-        assert_eq!(times_unjoined(&saved, "#rust"), 1);
+        assert_eq!(times_disconnected(&saved, "#halloy"), 1);
+        assert_eq!(times_disconnected(&saved, "#rust"), 1);
 
         join(&mut clients, &mut saved, "#halloy");
         update_disabled(&mut saved, &clients);
-        assert_eq!(times_unjoined(&saved, "#halloy"), 0);
+        assert_eq!(times_disconnected(&saved, "#halloy"), 0);
 
         close(&mut saved, "#rust");
         update_disabled(&mut saved, &clients);
-        assert_eq!(times_unjoined(&saved, "#rust"), 0);
+        assert_eq!(times_disconnected(&saved, "#rust"), 0);
     }
 
     #[test]
@@ -573,6 +617,6 @@ mod tests {
         update_disabled(&mut saved, &clients);
         part(&mut clients, &mut saved, "#halloy");
         update_disabled(&mut saved, &clients);
-        assert_eq!(times_unjoined(&saved, "#halloy"), 0);
+        assert_eq!(times_disconnected(&saved, "#halloy"), 0);
     }
 }

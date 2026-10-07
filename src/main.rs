@@ -869,13 +869,15 @@ impl Halloy {
                     sent_time,
                     autoconnect,
                 } => {
+                    if let Screen::Dashboard(dashboard) = &mut self.screen {
+                        dashboard.server_disconnected(&server, &self.clients);
+                    }
+
                     self.clients.disconnected(server.clone(), autoconnect);
 
                     let Screen::Dashboard(dashboard) = &mut self.screen else {
                         return Task::none();
                     };
-
-                    dashboard.server_disconnected(&server);
 
                     dashboard.process_server_inputs_completion_and_notice(
                         &server,

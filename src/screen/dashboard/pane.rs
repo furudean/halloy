@@ -85,10 +85,10 @@ impl Pane {
                 };
 
                 let server = &state.server;
-                let not_joined =
+                let disconnected =
                     !clients.contains_channel(server, &state.target);
 
-                let state_text = not_joined.then(|| {
+                let state_text = disconnected.then(|| {
                     container(
                         text("(Disconnected)")
                             .style(theme::text::secondary)

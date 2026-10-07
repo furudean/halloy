@@ -4195,7 +4195,7 @@ impl Client {
 
     pub fn sidebar_channels<'a>(
         &'a self,
-        unjoined: impl Iterator<Item = &'a target::Channel>,
+        disconnected: impl Iterator<Item = &'a target::Channel>,
     ) -> impl Iterator<Item = &'a target::Channel> {
         let casemapping = self.casemapping();
         let chantypes = self.chantypes();
@@ -4210,13 +4210,13 @@ impl Client {
             )
         };
 
-        let unjoined = unjoined
+        let disconnected = disconnected
             .filter(|channel| !self.chanmap.contains_key(*channel))
             .sorted_by(compare);
 
         self.chanmap
             .keys()
-            .merge_by(unjoined, move |a, b| compare(a, b).is_le())
+            .merge_by(disconnected, move |a, b| compare(a, b).is_le())
     }
 
     pub fn is_joined(&self, channel: &target::Channel) -> bool {
@@ -4224,16 +4224,7 @@ impl Client {
     }
 
     pub fn channel_muted(&self, channel: &target::Channel) -> bool {
-        let casemapping = self.casemapping();
-
-        self.config
-            .channels
-            .iter()
-            .find(|config_channel| {
-                casemapping.normalize(&config_channel.name)
-                    == channel.as_normalized_str()
-            })
-            .is_some_and(|config_channel| config_channel.mute)
+        self.config.channel_muted(channel, self.casemapping())
     }
 
     fn channel_users_received(&mut self, target_channel: target::Channel) {
@@ -4354,20 +4345,8 @@ impl Client {
     ) -> (Option<&'a target::Query>, bool) {
         (
             self.resolve_query(query),
-            if show_muted_buffers {
-                false
-            } else {
-                let casemapping = self.casemapping();
-
-                self.config
-                    .queries
-                    .iter()
-                    .find(|config_query| {
-                        casemapping.normalize(&config_query.name)
-                            == query.as_normalized_str()
-                    })
-                    .is_some_and(|config_query| config_query.mute)
-            },
+            !show_muted_buffers
+                && self.config.query_muted(query, self.casemapping()),
         )
     }
 
@@ -4740,6 +4719,25 @@ impl Client {
             );
         }
     }
+}
+
+// Sorts channels like `Client::sidebar_channels` for a server without a
+// connection, which has no ISUPPORT parameters to sort by.
+pub fn offline_sidebar_channels<'a>(
+    config: &config::server::Server,
+    channels: impl Iterator<Item = &'a target::Channel>,
+) -> Vec<&'a target::Channel> {
+    channels
+        .sorted_by(|a, b| {
+            compare_channels(
+                config,
+                isupport::DEFAULT_CHANTYPES,
+                isupport::CaseMap::default(),
+                a.as_normalized_str(),
+                b.as_normalized_str(),
+            )
+        })
+        .collect()
 }
 
 fn compare_channels_default(chantypes: &[char], a: &str, b: &str) -> Ordering {

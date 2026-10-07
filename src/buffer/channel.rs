@@ -210,7 +210,7 @@ pub fn view<'a>(
 
     let filehost_url = clients.get_filehost(server);
 
-    let not_joined = !clients.contains_channel(server, channel);
+    let disconnected = !clients.contains_channel(server, channel);
     let our_nick_user =
         our_nick.map(|our_nick| User::from(Nick::from(our_nick)));
 
@@ -218,7 +218,7 @@ pub fn view<'a>(
         input_view::view(
             &state.input_view,
             our_user.or(our_nick_user.as_ref()),
-            not_joined,
+            disconnected,
             users,
             &state.server,
             registry,

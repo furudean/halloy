@@ -21,6 +21,7 @@ Changed:
 
 - Default keybinds for focus movement on macOS changed from `⌥ + <arrow keys>` to `ctrl + <arrow keys>` to avoid conflicting with macOS by-word movement keybinds (`⌥ + ←` and `⌥ + →`)
 - Being kicked from a channel no longer closes the buffer.
+- Disconnecting from a server no longer removes its channels and queries from the sidebar.
 
 Thanks:
 

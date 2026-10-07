@@ -240,48 +240,26 @@ impl Sidebar {
             let is_collapsed =
                 !self.collapse.is_expanded(server, server_sidebar_visibility);
 
-            match state {
+            let mut buffer_data = upstream_buffer_data(
+                buffer::Upstream::Server(server.clone()),
+                history::Kind::Server(server.clone()),
+                false,
+                casemapping,
+            )?;
+
+            let mut collapsible_buffers = vec![];
+
+            let connection_status = match state {
                 data::client::State::Disconnected {
                     autoconnect,
                     connecting,
                 } => {
-                    // Hide channels & queries for disconnected servers
-                    upstream_buffer_data(
-                        buffer::Upstream::Server(server.clone()),
-                        history::Kind::Server(server.clone()),
-                        false,
-                        casemapping,
-                    )
-                    .map(|buffer_data| {
-                        SidebarBufferGroup::Upstream {
-                            server: server.clone(),
-                            visible_buffers: vec![buffer_data],
-                            connection_status: ConnectionStatus::Disconnected {
-                                autoconnect: *autoconnect,
-                                connecting: *connecting,
-                            },
-                            has_collapsible_buffers: false,
-                            casemapping,
-                            server_icon_enabled,
-                            server_sidebar_visibility,
-                        }
-                    })
-                }
-                data::client::State::Ready(connection) => {
-                    // Connected server.
-                    upstream_buffer_data(
-                        buffer::Upstream::Server(server.clone()),
-                        history::Kind::Server(server.clone()),
-                        false,
-                        casemapping,
-                    )
-                    .map(|mut buffer_data| {
-                        let mut collapsible_buffers = vec![];
-
-                        // Channels from the connected server.
-                        for channel in connection
-                            .sidebar_channels(history.unjoined_channels(server))
-                        {
+                    if let Some(server_config) = &server_config {
+                        // Channels from the server's last connection.
+                        for channel in client::offline_sidebar_channels(
+                            server_config,
+                            history.disconnected_channels(server),
+                        ) {
                             if let Some(mut buffer_data) = upstream_buffer_data(
                                 buffer::Upstream::Channel(
                                     server.clone(),
@@ -291,24 +269,17 @@ impl Sidebar {
                                     server.clone(),
                                     channel.clone(),
                                 ),
-                                connection.channel_muted(channel),
+                                server_config
+                                    .channel_muted(channel, casemapping),
                                 casemapping,
                             ) {
-                                buffer_data.not_joined =
-                                    !connection.is_joined(channel);
+                                buffer_data.disconnected = true;
                                 collapsible_buffers.push(buffer_data);
                             }
                         }
 
-                        // Queries from the connected server.
+                        // Queries from the server's last connection.
                         for query in history.get_unique_queries(server) {
-                            let (resolved_query, muted) = connection
-                                .resolve_query_with_muted(
-                                    query,
-                                    show_muted_buffers,
-                                );
-                            let query = resolved_query.unwrap_or(query);
-
                             if let Some(buffer_data) = upstream_buffer_data(
                                 buffer::Upstream::Query(
                                     server.clone(),
@@ -318,51 +289,103 @@ impl Sidebar {
                                     server.clone(),
                                     query.clone(),
                                 ),
-                                muted,
+                                !show_muted_buffers
+                                    && server_config
+                                        .query_muted(query, casemapping),
                                 casemapping,
                             ) {
                                 collapsible_buffers.push(buffer_data);
                             }
                         }
+                    }
 
-                        let has_collapsible_buffers =
-                            !collapsible_buffers.is_empty();
-
-                        let visible_buffers = if is_collapsed {
-                            buffer_data
-                                .collapse_indicators(&collapsible_buffers);
-
-                            vec![buffer_data]
-                                .into_iter()
-                                .chain(collapsible_buffers.into_iter().filter(
-                                    |buffer_data| {
-                                        buffer_data.is_visible_pane
-                                            || include_collapsed_buffers
-                                    },
-                                ))
-                                .collect()
-                        } else {
-                            vec![buffer_data]
-                                .into_iter()
-                                .chain(collapsible_buffers)
-                                .collect()
-                        };
-
-                        SidebarBufferGroup::Upstream {
-                            server: server.clone(),
-                            visible_buffers,
-                            connection_status: ConnectionStatus::Connected {
-                                registration_complete: connection
-                                    .registration_complete(),
-                            },
-                            has_collapsible_buffers,
-                            casemapping,
-                            server_icon_enabled,
-                            server_sidebar_visibility,
-                        }
-                    })
+                    ConnectionStatus::Disconnected {
+                        autoconnect: *autoconnect,
+                        connecting: *connecting,
+                    }
                 }
-            }
+                data::client::State::Ready(connection) => {
+                    // Channels from the connected server.
+                    for channel in connection
+                        .sidebar_channels(history.disconnected_channels(server))
+                    {
+                        if let Some(mut buffer_data) = upstream_buffer_data(
+                            buffer::Upstream::Channel(
+                                server.clone(),
+                                channel.clone(),
+                            ),
+                            history::Kind::Channel(
+                                server.clone(),
+                                channel.clone(),
+                            ),
+                            connection.channel_muted(channel),
+                            casemapping,
+                        ) {
+                            buffer_data.disconnected =
+                                !connection.is_joined(channel);
+                            collapsible_buffers.push(buffer_data);
+                        }
+                    }
+
+                    // Queries from the connected server.
+                    for query in history.get_unique_queries(server) {
+                        let (resolved_query, muted) = connection
+                            .resolve_query_with_muted(
+                                query,
+                                show_muted_buffers,
+                            );
+                        let query = resolved_query.unwrap_or(query);
+
+                        if let Some(buffer_data) = upstream_buffer_data(
+                            buffer::Upstream::Query(
+                                server.clone(),
+                                query.clone(),
+                            ),
+                            history::Kind::Query(server.clone(), query.clone()),
+                            muted,
+                            casemapping,
+                        ) {
+                            collapsible_buffers.push(buffer_data);
+                        }
+                    }
+
+                    ConnectionStatus::Connected {
+                        registration_complete: connection
+                            .registration_complete(),
+                    }
+                }
+            };
+
+            let has_collapsible_buffers = !collapsible_buffers.is_empty();
+
+            let visible_buffers = if is_collapsed {
+                buffer_data.collapse_indicators(&collapsible_buffers);
+
+                vec![buffer_data]
+                    .into_iter()
+                    .chain(collapsible_buffers.into_iter().filter(
+                        |buffer_data| {
+                            buffer_data.is_visible_pane
+                                || include_collapsed_buffers
+                        },
+                    ))
+                    .collect()
+            } else {
+                vec![buffer_data]
+                    .into_iter()
+                    .chain(collapsible_buffers)
+                    .collect()
+            };
+
+            Some(SidebarBufferGroup::Upstream {
+                server: server.clone(),
+                visible_buffers,
+                connection_status,
+                has_collapsible_buffers,
+                casemapping,
+                server_icon_enabled,
+                server_sidebar_visibility,
+            })
         };
 
         let upstream_buffers: Vec<SidebarBufferGroup> = servers
@@ -901,7 +924,7 @@ impl Sidebar {
                                 buffer: buffer_data.buffer,
                                 kind: buffer_data.kind,
                                 indicators: buffer_data.indicators,
-                                not_joined: buffer_data.not_joined,
+                                disconnected: buffer_data.disconnected,
                                 connection_status,
                                 server_has_collapsible_buffers:
                                     has_collapsible_buffers,
@@ -1083,7 +1106,7 @@ struct UpstreamBufferSidebarData {
     #[expect(dead_code)] // TODO: Cycle highlights
     has_highlight: bool,
     indicators: IndicatorState,
-    not_joined: bool,
+    disconnected: bool,
 }
 
 impl UpstreamBufferSidebarData {
@@ -1148,7 +1171,7 @@ impl UpstreamBufferSidebarData {
             has_unread,
             has_highlight,
             indicators,
-            not_joined: false,
+            disconnected: false,
         })
     }
 
@@ -1331,7 +1354,7 @@ impl Entry {
         connection_status: Option<ConnectionStatus>,
         supports_detach: bool,
         has_history: bool,
-        not_joined: bool,
+        disconnected: bool,
     ) -> Vec<Self> {
         use Entry::*;
 
@@ -1384,7 +1407,7 @@ impl Entry {
         });
 
         if connected {
-            if not_joined {
+            if disconnected {
                 entries.push(Join);
             } else if matches!(
                 buffer,
@@ -1394,15 +1417,23 @@ impl Entry {
                 entries.push(Detach);
             }
             entries.push(Leave);
+        } else if connection_status.is_some()
+            && matches!(
+                buffer,
+                buffer::Buffer::Upstream(
+                    buffer::Upstream::Channel(_, _)
+                        | buffer::Upstream::Query(_, _)
+                )
+            )
+        {
+            entries.push(Leave);
         }
 
         // TODO: Use sort or insert order to arrange context menu
         // entries, not both
         entries.sort();
 
-        if let buffer::Buffer::Upstream(buffer::Upstream::Server(_)) = buffer
-            && connected
-        {
+        if let buffer::Buffer::Upstream(buffer::Upstream::Server(_)) = buffer {
             entries.extend([HorizontalRule, ToggleCollapse]);
         }
         entries
@@ -1431,7 +1462,7 @@ struct UpstreamButtonContext<'a> {
     buffer: buffer::Upstream,
     kind: history::Kind,
     indicators: IndicatorState,
-    not_joined: bool,
+    disconnected: bool,
     connection_status: ConnectionStatus,
     server_has_collapsible_buffers: bool,
     server_has_unread: bool,
@@ -1556,7 +1587,7 @@ fn upstream_buffer_button<'a>(
         buffer,
         kind,
         indicators,
-        not_joined,
+        disconnected,
         connection_status,
         server_has_collapsible_buffers,
         casemapping,
@@ -1598,26 +1629,30 @@ fn upstream_buffer_button<'a>(
     let show_highlight_title =
         indicators.highlight && config.sidebar.highlight_indicator.title;
 
+    // Server disconnection takes priority over channel disconnection.
+    let server_disconnected =
+        matches!(connection_status, ConnectionStatus::Disconnected { .. });
+    let channel_disconnected = *disconnected && !server_disconnected;
+
     let buffer_title_style = if show_highlight_title {
         theme::text::highlight_indicator
     } else if show_unread_title {
         theme::text::unread_indicator
-    } else if *not_joined {
-        theme::text::secondary
     } else if let ConnectionStatus::Disconnected { connecting, .. } =
         &connection_status
-        && !*connecting
     {
-        if matches!(&buffer, buffer::Upstream::Server(_)) {
-            theme::text::error
-        } else {
-            theme::text::secondary
+        match buffer {
+            buffer::Upstream::Server(_) if *connecting => theme::text::primary,
+            buffer::Upstream::Server(_) => theme::text::error,
+            _ => theme::text::secondary,
         }
+    } else if channel_disconnected {
+        theme::text::secondary
     } else {
         theme::text::primary
     };
 
-    let buffer_title_font = if *not_joined {
+    let buffer_title_font = if channel_disconnected {
         Some(font::get(
             theme::font_style::secondary(theme).unwrap_or_default()
                 + FontStyle::Italic,
@@ -1729,7 +1764,6 @@ fn upstream_buffer_button<'a>(
             config,
             server,
             *server_sidebar_visibility,
-            connection_status,
             *server_has_collapsible_buffers,
             font_size.max(sidebar_icon_height as f32),
         )
@@ -1851,7 +1885,7 @@ fn upstream_buffer_context_menu<'a>(
         panes,
         focus,
         buffer,
-        not_joined,
+        disconnected,
         connection_status,
         server_has_unread,
         supports_detach,
@@ -1870,7 +1904,7 @@ fn upstream_buffer_context_menu<'a>(
         Some(connection_status),
         supports_detach,
         true,
-        not_joined,
+        disconnected,
     );
 
     if entries.is_empty() {
@@ -1955,7 +1989,7 @@ fn upstream_buffer_context_menu<'a>(
                 Entry::Leave => (
                     match &buffer {
                         buffer::Upstream::Server(_) => "Disconnect from server",
-                        buffer::Upstream::Channel(_, _) if not_joined => {
+                        buffer::Upstream::Channel(_, _) if disconnected => {
                             "Close channel"
                         }
                         buffer::Upstream::Channel(_, _) => "Leave channel",
