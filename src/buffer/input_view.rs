@@ -2176,8 +2176,16 @@ impl State {
                         };
 
                         // Part channel. Might not exist if we execute on a query/server.
-                        let part_command =
-                            buffer.channel().and_then(|channel| {
+                        let part_command = buffer
+                            .channel()
+                            .filter(|channel| {
+                                !history.is_unjoined_channel(
+                                    clients,
+                                    buffer.server(),
+                                    channel,
+                                )
+                            })
+                            .and_then(|channel| {
                                 data::Input::from_command(
                                     buffer.clone(),
                                     command::Irc::Part(

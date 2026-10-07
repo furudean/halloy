@@ -3520,7 +3520,7 @@ impl Dashboard {
                 );
                 let input = data::Input::from_command(buffer.clone(), command);
 
-                if !self.is_unjoined_channel(clients, &server, &channel)
+                if !self.history.is_unjoined_channel(clients, &server, &channel)
                     && let Some(encoded) = input.encoded()
                 {
                     clients.send_from_buffer(
@@ -3570,19 +3570,6 @@ impl Dashboard {
         }
     }
 
-    fn is_unjoined_channel(
-        &self,
-        clients: &data::client::Map,
-        server: &Server,
-        channel: &target::Channel,
-    ) -> bool {
-        !clients.contains_channel(server, channel)
-            && self
-                .history
-                .unjoined_channels(server)
-                .any(|unjoined| unjoined == channel)
-    }
-
     pub fn leave_server_target(
         &mut self,
         clients: &mut data::client::Map,
@@ -3615,7 +3602,7 @@ impl Dashboard {
                 let command = command::Irc::Part(channel.to_string(), reason);
                 let input = data::Input::from_command(buffer.clone(), command);
 
-                if !self.is_unjoined_channel(clients, &server, &channel)
+                if !self.history.is_unjoined_channel(clients, &server, &channel)
                     && let Some(encoded) = input.encoded()
                 {
                     clients.send_from_buffer(

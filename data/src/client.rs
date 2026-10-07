@@ -236,8 +236,7 @@ pub struct Client {
     chathistory_requests: HashMap<Target, ChatHistoryRequest>,
     chathistory_exhausted: HashMap<Target, bool>,
     chathistory_targets_request: Option<ChatHistoryRequest>,
-    chathistory_targets_complete: bool,
-    latest_server_time: Option<DateTime<Utc>>,
+    chathistory_targets_completed_at: Option<DateTime<Utc>>,
     notification_blackout: NotificationBlackout,
     registration_required_channels: Vec<target::Channel>,
     isupport: HashMap<isupport::Kind, isupport::Parameter>,
@@ -304,8 +303,7 @@ impl Client {
             chathistory_requests: HashMap::new(),
             chathistory_exhausted: HashMap::new(),
             chathistory_targets_request: None,
-            chathistory_targets_complete: false,
-            latest_server_time: None,
+            chathistory_targets_completed_at: None,
             notification_blackout: NotificationBlackout::Blackout(
                 Instant::now(),
             ),
@@ -990,11 +988,6 @@ impl Client {
 
         let stop_reroute = self.stop_reroute(&message);
 
-        if let Some(server_time) = message.server_time() {
-            self.latest_server_time =
-                self.latest_server_time.max(Some(server_time));
-        }
-
         let events = self.handle(message, None, config)?;
 
         if stop_reroute {
@@ -1255,8 +1248,8 @@ impl Client {
                                                 TokenPriority::High,
                                             );
                                         } else if autorequest {
-                                            self.chathistory_targets_complete =
-                                                true;
+                                            self.chathistory_targets_completed_at =
+                                                Some(Utc::now());
                                         }
                                     }
                                     Some(BatchKind::Multiline(
@@ -5660,11 +5653,9 @@ impl Map {
         self.0
             .iter()
             .filter_map(|(server, state)| match state {
-                State::Ready(client) if client.chathistory_targets_complete => {
-                    client
-                        .latest_server_time
-                        .map(|server_time| (server.clone(), server_time))
-                }
+                State::Ready(client) => client
+                    .chathistory_targets_completed_at
+                    .map(|completed_at| (server.clone(), completed_at)),
                 _ => None,
             })
             .collect()

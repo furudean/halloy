@@ -965,6 +965,18 @@ impl Manager {
         self.saved_buffers.unjoined_channels(server)
     }
 
+    pub fn is_unjoined_channel(
+        &self,
+        clients: &client::Map,
+        server: &Server,
+        channel: &target::Channel,
+    ) -> bool {
+        !clients.contains_channel(server, channel)
+            && self
+                .unjoined_channels(server)
+                .any(|unjoined| unjoined == channel)
+    }
+
     pub fn left_channel(&mut self, server: Server, channel: target::Channel) {
         self.saved_buffers.left(server, channel);
     }
