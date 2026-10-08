@@ -945,12 +945,12 @@ impl Manager {
     pub fn update_saved_buffers(
         &mut self,
         clients: &client::Map,
-        restore_on_launch: bool,
+        remember_buffers: bool,
     ) -> bool {
         self.sidebar_buffers.update(
             sidebar_queries(&self.data.map, &self.filters),
             clients,
-            restore_on_launch,
+            remember_buffers,
         )
     }
 

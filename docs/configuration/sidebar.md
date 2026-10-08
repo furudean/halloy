@@ -141,7 +141,7 @@ channels = ["#rust", "#halloy", "#halloy-test"]
 # Result: #rust → #halloy → #halloy-test → (any other channels are sorted by "name")
 ```
 
-## `restore_on_launch`
+## `remember_buffers`
 
 Restore the buffers that were in the sidebar during the last session.
 
@@ -154,7 +154,7 @@ Channels are not automatically joined, this is instead covered by
 # Default: false
 
 [sidebar]
-restore_on_launch = true
+remember_buffers = true
 ```
 
 ## `internal_buffers` {#internal-buffers}

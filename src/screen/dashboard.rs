@@ -189,7 +189,7 @@ impl Dashboard {
             dashboard.focus_buffer = None;
         }
 
-        if !config.sidebar.restore_on_launch {
+        if !config.sidebar.remember_buffers {
             dashboard.buffers.clear();
         }
 
@@ -4664,7 +4664,7 @@ impl Dashboard {
 
         if self
             .history
-            .update_saved_buffers(clients, config.sidebar.restore_on_launch)
+            .update_saved_buffers(clients, config.sidebar.remember_buffers)
         {
             self.last_changed = Some(now);
         }
@@ -5247,7 +5247,7 @@ impl Dashboard {
 
         if self
             .history
-            .update_saved_buffers(clients, config.sidebar.restore_on_launch)
+            .update_saved_buffers(clients, config.sidebar.remember_buffers)
         {
             self.last_changed = Some(Instant::now());
         }

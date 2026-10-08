@@ -124,7 +124,7 @@ impl SidebarBuffers {
         &mut self,
         queries: impl Iterator<Item = (&'a Server, &'a target::Query)> + Clone,
         clients: &client::Map,
-        restore_on_launch: bool,
+        remember_buffers: bool,
     ) -> bool {
         // History is empty once exit starts, so the exit snapshot stays.
         if self.exited {
@@ -139,7 +139,7 @@ impl SidebarBuffers {
 
         self.disconnected.retain(|_, channels| !channels.is_empty());
 
-        if !restore_on_launch {
+        if !remember_buffers {
             let cleared = self.buffers.values().any(|buffers| {
                 !buffers.channels.is_empty() || !buffers.queries.is_empty()
             });
@@ -507,7 +507,7 @@ mod tests {
     }
 
     #[test]
-    fn joined_channels_stay_disconnected_when_restore_on_launch_is_disabled() {
+    fn joined_channels_stay_disconnected_when_remember_buffers_is_disabled() {
         let mut clients = clients();
         let mut buffers = SidebarBuffers::default();
 
@@ -646,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn left_channels_stay_disconnected_when_restore_on_launch_is_disabled() {
+    fn left_channels_stay_disconnected_when_remember_buffers_is_disabled() {
         let mut clients = clients();
         let mut buffers = SidebarBuffers::default();
 
@@ -672,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn closed_channel_is_not_kept_when_restore_on_launch_is_disabled() {
+    fn closed_channel_is_not_kept_when_remember_buffers_is_disabled() {
         let mut clients = clients();
         let mut buffers = SidebarBuffers::default();
 
