@@ -4189,9 +4189,7 @@ impl Client {
             )
         };
 
-        let disconnected = disconnected
-            .filter(|channel| !self.chanmap.contains_key(*channel))
-            .sorted_by(compare);
+        let disconnected = disconnected.sorted_by(compare);
 
         self.chanmap
             .keys()
@@ -5238,8 +5236,7 @@ impl Map {
         server: &Server,
         chan: &target::Channel,
     ) -> bool {
-        self.client(server)
-            .is_some_and(|c| c.chanmap.contains_key(chan))
+        self.client(server).is_some_and(|c| c.is_joined(chan))
     }
 
     pub fn resolve_query<'a>(

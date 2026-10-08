@@ -11,7 +11,7 @@ use tokio::time::Instant;
 use super::filter::{Filter, FilterChain};
 use super::reroute::RerouteRules;
 use super::sidebar_buffers::SidebarBuffers;
-use super::targets_timestamps::{self, TargetsTimestamps};
+use super::targets_timestamps::TargetsTimestamps;
 use crate::capabilities::LabeledResponseContext;
 use crate::history::{self, History, MessageReferences, ReadMarker, metadata};
 use crate::message::broadcast::{self, Broadcast};
@@ -92,7 +92,7 @@ pub enum Message {
     ResendMessage(history::Kind, message::Message),
     DraftsSaved,
     EchoEvents(Server, Vec<EchoEvent>),
-    TargetsTimestampUpdated(Server, DateTime<Utc>, Result<(), client::Error>),
+    TargetsTimestampUpdated,
 }
 
 pub enum Event {
@@ -374,9 +374,7 @@ impl Manager {
             Message::EchoEvents(server, events) => {
                 return Some(Event::EchoEvents(server, events));
             }
-            Message::TargetsTimestampUpdated(server, timestamp, result) => {
-                targets_timestamps::log_updated(&server, timestamp, &result);
-            }
+            Message::TargetsTimestampUpdated => {}
         }
 
         None
@@ -484,25 +482,12 @@ impl Manager {
                     .map(move |result| (kind, result))
             });
 
-            let (results, (), updated) = future::join3(
+            let (results, (), _) = future::join3(
                 future::join_all(tasks),
                 input::save_drafts(drafts),
                 future::join_all(targets_timestamps),
             )
             .await;
-
-            for message in updated {
-                if let Message::TargetsTimestampUpdated(
-                    server,
-                    timestamp,
-                    result,
-                ) = message
-                {
-                    targets_timestamps::log_updated(
-                        &server, timestamp, &result,
-                    );
-                }
-            }
 
             Message::Exited(results)
         }
@@ -967,14 +952,18 @@ impl Manager {
 
     pub fn is_disconnected_channel(
         &self,
-        clients: &client::Map,
         server: &Server,
         channel: &target::Channel,
     ) -> bool {
-        !clients.contains_channel(server, channel)
-            && self
-                .disconnected_channels(server)
-                .any(|disconnected| disconnected == channel)
+        self.sidebar_buffers.is_disconnected(server, channel)
+    }
+
+    pub fn joined_channel(
+        &mut self,
+        server: &Server,
+        channel: &target::Channel,
+    ) {
+        self.sidebar_buffers.joined(server, channel);
     }
 
     pub fn left_channel(&mut self, server: Server, channel: target::Channel) {

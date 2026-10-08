@@ -2188,7 +2188,6 @@ impl State {
                             .channel()
                             .filter(|channel| {
                                 !history.is_disconnected_channel(
-                                    clients,
                                     buffer.server(),
                                     channel,
                                 )

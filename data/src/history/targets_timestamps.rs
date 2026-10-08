@@ -87,26 +87,20 @@ fn write(
         )
         .await;
 
-        Message::TargetsTimestampUpdated(server, timestamp, result)
+        match result {
+            Ok(()) => {
+                log::debug!(
+                    "updated targets timestamp for {server} to {timestamp}"
+                );
+            }
+            Err(error) => {
+                log::warn!(
+                    "failed to update targets timestamp for {server} to {timestamp}: {error}"
+                );
+            }
+        }
+
+        Message::TargetsTimestampUpdated
     }
     .boxed()
-}
-
-pub fn log_updated(
-    server: &Server,
-    timestamp: DateTime<Utc>,
-    result: &Result<(), client::Error>,
-) {
-    match result {
-        Ok(()) => {
-            log::debug!(
-                "updated targets timestamp for {server} to {timestamp}"
-            );
-        }
-        Err(error) => {
-            log::warn!(
-                "failed to update targets timestamp for {server} to {timestamp}: {error}"
-            );
-        }
-    }
 }

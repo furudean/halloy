@@ -869,18 +869,17 @@ impl Halloy {
                     sent_time,
                     autoconnect,
                 } => {
-                    let disconnected_task = match &mut self.screen {
-                        Screen::Dashboard(dashboard) => dashboard
-                            .server_disconnected(&server, &self.clients)
-                            .map(Message::Dashboard),
-                        _ => Task::none(),
-                    };
-
-                    self.clients.disconnected(server.clone(), autoconnect);
-
                     let Screen::Dashboard(dashboard) = &mut self.screen else {
+                        self.clients.disconnected(server.clone(), autoconnect);
+
                         return Task::none();
                     };
+
+                    let disconnected_task = dashboard
+                        .server_disconnected(&server, &self.clients)
+                        .map(Message::Dashboard);
+
+                    self.clients.disconnected(server.clone(), autoconnect);
 
                     dashboard.process_server_inputs_completion_and_notice(
                         &server,
@@ -2015,6 +2014,8 @@ fn handle_client_events(
                 dashboard.left_channel(server.clone(), channel);
             }
             Event::JoinedChannel(channel, server_time) => {
+                dashboard.joined_channel(server, &channel);
+
                 commands.push(
                     dashboard
                         .track_channel_monitor_channel(

@@ -18,8 +18,6 @@ pub struct SidebarBuffers {
     // whether restored (restoring a channel does not join it), left, or
     // dropped with their server's connection.
     disconnected: HashMap<Server, HashSet<target::Channel>>,
-    // Holds the channels joined on each server's current connection.
-    joined: HashMap<Server, HashSet<target::Channel>>,
     closing: HashMap<Server, HashSet<target::Channel>>,
     changed: bool,
     exited: bool,
@@ -48,6 +46,16 @@ impl SidebarBuffers {
         self.disconnected.get(server).into_iter().flatten()
     }
 
+    pub fn is_disconnected(
+        &self,
+        server: &Server,
+        channel: &target::Channel,
+    ) -> bool {
+        self.disconnected
+            .get(server)
+            .is_some_and(|channels| channels.contains(channel))
+    }
+
     pub fn left(&mut self, server: Server, channel: target::Channel) {
         if self
             .closing
@@ -58,6 +66,16 @@ impl SidebarBuffers {
         }
 
         self.disconnected.entry(server).or_default().insert(channel);
+    }
+
+    pub fn joined(&mut self, server: &Server, channel: &target::Channel) {
+        if let Some(channels) = self.disconnected.get_mut(server) {
+            channels.remove(channel);
+
+            if channels.is_empty() {
+                self.disconnected.remove(server);
+            }
+        }
     }
 
     pub fn close(&mut self, kind: &history::Kind) {
@@ -77,9 +95,6 @@ impl SidebarBuffers {
         }
     }
 
-    // Marks the server's joined channels as disconnected, so they stay in the
-    // sidebar, and resets join tracking, so a reconnect is never mistaken for
-    // parts. Must be called before the server's client is dropped.
     pub fn server_disconnected(
         &mut self,
         server: &Server,
@@ -103,8 +118,6 @@ impl SidebarBuffers {
                 .or_default()
                 .extend(channels);
         }
-
-        self.joined.remove(server);
     }
 
     pub fn server_removed(&mut self, server: &Server) {
@@ -115,7 +128,6 @@ impl SidebarBuffers {
         }
 
         self.disconnected.remove(server);
-        self.joined.remove(server);
         self.closing.remove(server);
     }
 
@@ -126,18 +138,9 @@ impl SidebarBuffers {
         clients: &client::Map,
         remember_buffers: bool,
     ) -> bool {
-        // History is empty once exit starts, so the exit snapshot stays.
         if self.exited {
             return false;
         }
-
-        // Joined channels are tracked by their client from here on.
-        for (server, channels) in &mut self.disconnected {
-            channels
-                .retain(|channel| !clients.contains_channel(server, channel));
-        }
-
-        self.disconnected.retain(|_, channels| !channels.is_empty());
 
         if !remember_buffers {
             let cleared = self.buffers.values().any(|buffers| {
@@ -145,7 +148,6 @@ impl SidebarBuffers {
             });
 
             self.buffers.clear();
-            self.joined.clear();
             self.changed = false;
             self.prune_closing(clients);
 
@@ -154,30 +156,24 @@ impl SidebarBuffers {
 
         let mut changed = std::mem::take(&mut self.changed);
 
-        self.joined
-            .retain(|server, _| clients.get_server_is_connected(server));
-
         for server in clients
             .connected_servers()
             .filter(|server| !server.is_bouncer_network())
         {
-            let joined = self.joined.entry(server.clone()).or_default();
             let saved =
                 &mut self.buffers.entry(server.clone()).or_default().channels;
             let closing = self.closing.get(server);
 
             // Left channels stay saved, since their buffer stays open.
-            joined.retain(|channel| clients.contains_channel(server, channel));
-
             for channel in clients.get_channels(server) {
                 // Closed channels stay unsaved while their PART is in flight.
                 if closing.is_some_and(|closing| closing.contains(channel)) {
                     continue;
                 }
 
-                if !joined.contains(channel) {
-                    joined.insert(channel.clone());
-                    changed |= saved.insert(channel.clone());
+                if !saved.contains(channel) {
+                    saved.insert(channel.clone());
+                    changed = true;
                 }
             }
         }
@@ -325,8 +321,14 @@ mod tests {
             .unwrap();
 
         for event in events {
-            if let client::Event::LeftChannel(channel) = event {
-                buffers.left(server(), channel);
+            match event {
+                client::Event::JoinedChannel(channel, _) => {
+                    buffers.joined(&server(), &channel);
+                }
+                client::Event::LeftChannel(channel) => {
+                    buffers.left(server(), channel);
+                }
+                _ => {}
             }
         }
     }
@@ -398,12 +400,8 @@ mod tests {
             .contains(&(server(), Target::Channel(channel(name))))
     }
 
-    // Counts how often the channel is listed, so the sidebar shows it once.
-    fn times_disconnected(buffers: &SidebarBuffers, name: &str) -> usize {
-        buffers
-            .disconnected_channels(&server())
-            .filter(|disconnected| **disconnected == channel(name))
-            .count()
+    fn is_disconnected(buffers: &SidebarBuffers, name: &str) -> bool {
+        buffers.is_disconnected(&server(), &channel(name))
     }
 
     #[test]
@@ -414,13 +412,13 @@ mod tests {
         join(&mut clients, &mut buffers, "#halloy");
         assert!(update(&mut buffers, &clients));
         assert!(is_saved(&buffers, "#halloy"));
-        assert_eq!(times_disconnected(&buffers, "#halloy"), 0);
+        assert!(!is_disconnected(&buffers, "#halloy"));
 
         kick(&mut clients, &mut buffers, "#halloy");
-        assert_eq!(times_disconnected(&buffers, "#halloy"), 1);
+        assert!(is_disconnected(&buffers, "#halloy"));
         assert!(!update(&mut buffers, &clients));
         assert!(is_saved(&buffers, "#halloy"));
-        assert_eq!(times_disconnected(&buffers, "#halloy"), 1);
+        assert!(is_disconnected(&buffers, "#halloy"));
     }
 
     #[test]
@@ -436,13 +434,13 @@ mod tests {
         join(&mut clients, &mut buffers, "#halloy");
         update(&mut buffers, &clients);
         assert!(is_saved(&buffers, "#halloy"));
-        assert_eq!(times_disconnected(&buffers, "#halloy"), 0);
+        assert!(!is_disconnected(&buffers, "#halloy"));
 
         // Parting again keeps the buffer open again.
         part(&mut clients, &mut buffers, "#halloy");
         update(&mut buffers, &clients);
         assert!(is_saved(&buffers, "#halloy"));
-        assert_eq!(times_disconnected(&buffers, "#halloy"), 1);
+        assert!(is_disconnected(&buffers, "#halloy"));
     }
 
     #[test]
@@ -461,7 +459,7 @@ mod tests {
         update(&mut buffers, &clients);
 
         assert!(is_saved(&buffers, "#halloy"));
-        assert_eq!(times_disconnected(&buffers, "#halloy"), 1);
+        assert!(is_disconnected(&buffers, "#halloy"));
     }
 
     #[test]
@@ -477,8 +475,8 @@ mod tests {
         assert!(!update(&mut buffers, &clients));
         assert!(is_saved(&buffers, "#halloy"));
         assert!(is_saved(&buffers, "#rust"));
-        assert_eq!(times_disconnected(&buffers, "#halloy"), 1);
-        assert_eq!(times_disconnected(&buffers, "#rust"), 1);
+        assert!(is_disconnected(&buffers, "#halloy"));
+        assert!(is_disconnected(&buffers, "#rust"));
 
         // Only channels joined again after reconnecting are connected.
         connect(&mut clients);
@@ -486,8 +484,8 @@ mod tests {
         update(&mut buffers, &clients);
         assert!(is_saved(&buffers, "#halloy"));
         assert!(is_saved(&buffers, "#rust"));
-        assert_eq!(times_disconnected(&buffers, "#halloy"), 0);
-        assert_eq!(times_disconnected(&buffers, "#rust"), 1);
+        assert!(!is_disconnected(&buffers, "#halloy"));
+        assert!(is_disconnected(&buffers, "#rust"));
     }
 
     #[test]
@@ -503,7 +501,7 @@ mod tests {
         disconnect(&mut clients, &mut buffers);
         update(&mut buffers, &clients);
         assert!(!is_saved(&buffers, "#halloy"));
-        assert_eq!(times_disconnected(&buffers, "#halloy"), 0);
+        assert!(!is_disconnected(&buffers, "#halloy"));
     }
 
     #[test]
@@ -517,7 +515,7 @@ mod tests {
         disconnect(&mut clients, &mut buffers);
         update_disabled(&mut buffers, &clients);
         assert!(!is_saved(&buffers, "#halloy"));
-        assert_eq!(times_disconnected(&buffers, "#halloy"), 1);
+        assert!(is_disconnected(&buffers, "#halloy"));
     }
 
     #[test]
@@ -529,8 +527,8 @@ mod tests {
         kick(&mut clients, &mut buffers, "#rust");
         update(&mut buffers, &clients);
         assert!(!is_saved(&buffers, "#halloy"));
-        assert_eq!(times_disconnected(&buffers, "#halloy"), 0);
-        assert_eq!(times_disconnected(&buffers, "#rust"), 0);
+        assert!(!is_disconnected(&buffers, "#halloy"));
+        assert!(!is_disconnected(&buffers, "#rust"));
     }
 
     #[test]
@@ -545,7 +543,7 @@ mod tests {
         part(&mut clients, &mut buffers, "#halloy");
         assert!(update(&mut buffers, &clients));
         assert!(!is_saved(&buffers, "#halloy"));
-        assert_eq!(times_disconnected(&buffers, "#halloy"), 0);
+        assert!(!is_disconnected(&buffers, "#halloy"));
     }
 
     #[test]
@@ -565,7 +563,7 @@ mod tests {
         part(&mut clients, &mut buffers, "#halloy");
         assert!(!update(&mut buffers, &clients));
         assert!(!is_saved(&buffers, "#halloy"));
-        assert_eq!(times_disconnected(&buffers, "#halloy"), 0);
+        assert!(!is_disconnected(&buffers, "#halloy"));
     }
 
     #[test]
@@ -584,7 +582,7 @@ mod tests {
         assert!(update(&mut buffers, &clients));
         assert!(!is_saved(&buffers, "#halloy"));
         assert!(!is_saved(&buffers, "#rust"));
-        assert_eq!(times_disconnected(&buffers, "#rust"), 0);
+        assert!(!is_disconnected(&buffers, "#rust"));
     }
 
     #[test]
@@ -618,7 +616,7 @@ mod tests {
         disconnect(&mut clients, &mut buffers);
         update(&mut buffers, &clients);
         assert!(!is_saved(&buffers, "#halloy"));
-        assert_eq!(times_disconnected(&buffers, "#halloy"), 0);
+        assert!(!is_disconnected(&buffers, "#halloy"));
     }
 
     #[test]
@@ -634,7 +632,7 @@ mod tests {
         close(&mut buffers, "#halloy");
         assert!(update(&mut buffers, &clients));
         assert!(!is_saved(&buffers, "#halloy"));
-        assert_eq!(times_disconnected(&buffers, "#halloy"), 0);
+        assert!(!is_disconnected(&buffers, "#halloy"));
 
         // A later join is not mistaken for the closed channel's PART.
         join(&mut clients, &mut buffers, "#halloy");
@@ -642,7 +640,7 @@ mod tests {
         kick(&mut clients, &mut buffers, "#halloy");
         update(&mut buffers, &clients);
         assert!(is_saved(&buffers, "#halloy"));
-        assert_eq!(times_disconnected(&buffers, "#halloy"), 1);
+        assert!(is_disconnected(&buffers, "#halloy"));
     }
 
     #[test]
@@ -659,16 +657,16 @@ mod tests {
         assert!(!update_disabled(&mut buffers, &clients));
         assert!(!is_saved(&buffers, "#halloy"));
         assert!(!is_saved(&buffers, "#rust"));
-        assert_eq!(times_disconnected(&buffers, "#halloy"), 1);
-        assert_eq!(times_disconnected(&buffers, "#rust"), 1);
+        assert!(is_disconnected(&buffers, "#halloy"));
+        assert!(is_disconnected(&buffers, "#rust"));
 
         join(&mut clients, &mut buffers, "#halloy");
         update_disabled(&mut buffers, &clients);
-        assert_eq!(times_disconnected(&buffers, "#halloy"), 0);
+        assert!(!is_disconnected(&buffers, "#halloy"));
 
         close(&mut buffers, "#rust");
         update_disabled(&mut buffers, &clients);
-        assert_eq!(times_disconnected(&buffers, "#rust"), 0);
+        assert!(!is_disconnected(&buffers, "#rust"));
     }
 
     #[test]
@@ -683,6 +681,6 @@ mod tests {
         update_disabled(&mut buffers, &clients);
         part(&mut clients, &mut buffers, "#halloy");
         update_disabled(&mut buffers, &clients);
-        assert_eq!(times_disconnected(&buffers, "#halloy"), 0);
+        assert!(!is_disconnected(&buffers, "#halloy"));
     }
 }
