@@ -30,7 +30,6 @@ pub mod manager;
 pub mod metadata;
 pub mod reroute;
 pub mod sidebar_buffers;
-pub mod targets_timestamps;
 
 // TODO: Make this configurable?
 /// Max # messages to persist

@@ -875,9 +875,7 @@ impl Halloy {
                         return Task::none();
                     };
 
-                    let disconnected_task = dashboard
-                        .server_disconnected(&server, &self.clients)
-                        .map(Message::Dashboard);
+                    dashboard.server_disconnected(&server, &self.clients);
 
                     self.clients.disconnected(server.clone(), autoconnect);
 
@@ -888,7 +886,7 @@ impl Halloy {
                     );
 
                     if is_initial || self.power.suppresses_connection_events() {
-                        disconnected_task
+                        Task::none()
                     } else {
                         if !self.main_window.focused {
                             self.notifications.notify(
@@ -899,7 +897,6 @@ impl Halloy {
                         }
 
                         Task::batch(vec![
-                            disconnected_task,
                             dashboard
                                 .broadcast(
                                     &server,
@@ -2072,6 +2069,18 @@ fn handle_client_events(
                         )
                         .map(Message::Dashboard),
                 );
+            }
+            Event::ChatHistoryTargetsReceived(server_time) => {
+                if let Some(command) = dashboard
+                    .overwrite_chathistory_targets_timestamp(
+                        clients,
+                        server,
+                        server_time,
+                    )
+                    .map(|cmd| cmd.map(Message::Dashboard))
+                {
+                    commands.push(command);
+                }
             }
             Event::DirectMessage(encoded, our_nick, user) => {
                 handle_direct_message(

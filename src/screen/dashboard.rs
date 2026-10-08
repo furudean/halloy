@@ -1661,6 +1661,24 @@ impl Dashboard {
                         TokenPriority::High,
                     );
                 }
+                client::Message::ChatHistoryTargetsTimestampUpdated(
+                    server,
+                    timestamp,
+                    Ok(()),
+                ) => {
+                    log::debug!(
+                        "updated targets timestamp for {server} to {timestamp}"
+                    );
+                }
+                client::Message::ChatHistoryTargetsTimestampUpdated(
+                    server,
+                    timestamp,
+                    Err(error),
+                ) => {
+                    log::warn!(
+                        "failed to update targets timestamp for {server} to {timestamp}: {error}"
+                    );
+                }
                 client::Message::RequestNewerChatHistory(
                     server,
                     target,
@@ -4215,6 +4233,17 @@ impl Dashboard {
             .map(|task| Task::perform(task, Message::Client))
     }
 
+    pub fn overwrite_chathistory_targets_timestamp(
+        &self,
+        clients: &data::client::Map,
+        server: &Server,
+        timestamp: DateTime<Utc>,
+    ) -> Option<Task<Message>> {
+        clients
+            .overwrite_chathistory_targets_timestamp(server, timestamp)
+            .map(|task| Task::perform(task, Message::Client))
+    }
+
     pub fn get_focused(&self) -> Option<(window::Id, pane_grid::Pane, &Pane)> {
         let Focus { window, pane } = self.focus;
         self.panes
@@ -4271,13 +4300,8 @@ impl Dashboard {
         &mut self,
         server: &Server,
         clients: &data::client::Map,
-    ) -> Task<Message> {
-        Task::batch(
-            self.history
-                .server_disconnected(server, clients)
-                .into_iter()
-                .map(|task| Task::perform(task, Message::History)),
-        )
+    ) {
+        self.history.server_disconnected(server, clients);
     }
 
     pub fn server_removed(&mut self, server: &Server) {

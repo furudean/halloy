@@ -11,7 +11,6 @@ use tokio::time::Instant;
 use super::filter::{Filter, FilterChain};
 use super::reroute::RerouteRules;
 use super::sidebar_buffers::SidebarBuffers;
-use super::targets_timestamps::TargetsTimestamps;
 use crate::capabilities::LabeledResponseContext;
 use crate::history::{self, History, MessageReferences, ReadMarker, metadata};
 use crate::message::broadcast::{self, Broadcast};
@@ -92,7 +91,6 @@ pub enum Message {
     ResendMessage(history::Kind, message::Message),
     DraftsSaved,
     EchoEvents(Server, Vec<EchoEvent>),
-    TargetsTimestampUpdated,
 }
 
 pub enum Event {
@@ -134,7 +132,6 @@ pub struct Manager {
     data: Data,
     last_draft_changed: Option<tokio::time::Instant>,
     sidebar_buffers: SidebarBuffers,
-    targets_timestamps: TargetsTimestamps,
 }
 
 impl Manager {
@@ -396,7 +393,6 @@ impl Manager {
             Message::EchoEvents(server, events) => {
                 return Some(Event::EchoEvents(server, events));
             }
-            Message::TargetsTimestampUpdated => {}
         }
 
         None
@@ -432,12 +428,7 @@ impl Manager {
         clients: &client::Map,
         server_messages_config: &config::buffer::ServerMessages,
     ) -> Vec<BoxFuture<'static, Message>> {
-        let mut tasks =
-            self.data.flush_all(now, clients, server_messages_config);
-
-        tasks.extend(self.targets_timestamps.refresh(now, clients));
-
-        tasks
+        self.data.flush_all(now, clients, server_messages_config)
     }
 
     pub fn close(
@@ -484,8 +475,6 @@ impl Manager {
     ) -> impl Future<Output = Message> + use<> {
         self.sidebar_buffers.exit();
 
-        let targets_timestamps = self.targets_timestamps.exit(clients);
-
         let data = std::mem::take(&mut self.data);
         let drafts = data.input.clone_drafts();
         let seeded_map = data
@@ -504,13 +493,8 @@ impl Manager {
                     .map(move |result| (kind, result))
             });
 
-            let (results, (), _) = future::join3(
-                future::join_all(tasks),
-                input::save_drafts(drafts),
-                future::join_all(targets_timestamps),
-            )
-            .await;
-
+            let results = future::join_all(tasks).await;
+            input::save_drafts(drafts).await;
             Message::Exited(results)
         }
     }
@@ -1010,10 +994,8 @@ impl Manager {
         &mut self,
         server: &Server,
         clients: &client::Map,
-    ) -> Vec<BoxFuture<'static, Message>> {
+    ) {
         self.sidebar_buffers.server_disconnected(server, clients);
-
-        self.targets_timestamps.server_disconnected(server, clients)
     }
 
     pub fn server_removed(&mut self, server: &Server) {
