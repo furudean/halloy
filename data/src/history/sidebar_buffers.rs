@@ -141,10 +141,7 @@ impl SidebarBuffers {
 
         let mut changed = std::mem::take(&mut self.changed);
 
-        for server in clients
-            .connected_servers()
-            .filter(|server| !server.is_bouncer_network())
-        {
+        for server in clients.connected_servers() {
             let saved =
                 &mut self.buffers.entry(server.clone()).or_default().channels;
             let closing = self.closing.get(server);

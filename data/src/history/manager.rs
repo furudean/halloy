@@ -1028,11 +1028,7 @@ impl Manager {
         let mut tasks = vec![];
 
         for (server, target) in buffers {
-            // The bouncer rejoins the channels of its networks.
-            if !servers.contains(&server.name)
-                || (server.is_bouncer_network()
-                    && matches!(target, Target::Channel(_)))
-            {
+            if !servers.contains(&server.name) {
                 continue;
             }
 
