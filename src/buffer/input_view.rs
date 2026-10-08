@@ -2187,10 +2187,8 @@ impl State {
                         let part_command = buffer
                             .channel()
                             .filter(|channel| {
-                                !history.is_disconnected_channel(
-                                    buffer.server(),
-                                    channel,
-                                )
+                                clients
+                                    .contains_channel(buffer.server(), channel)
                             })
                             .and_then(|channel| {
                                 data::Input::from_command(

@@ -246,108 +246,60 @@ impl Sidebar {
                 casemapping,
             )?;
 
+            let targets = history.sidebar_targets(
+                server,
+                clients,
+                server_config.as_deref(),
+            );
+
+            let mute_config = clients
+                .get_server_config(server)
+                .or(server_config.as_deref());
+
             let mut collapsible_buffers = vec![];
+
+            for (channel, channel_state) in targets.channels {
+                if let Some(mut buffer_data) = upstream_buffer_data(
+                    buffer::Upstream::Channel(server.clone(), channel.clone()),
+                    history::Kind::Channel(server.clone(), channel.clone()),
+                    mute_config.is_some_and(|config| {
+                        config.channel_muted(channel, casemapping)
+                    }),
+                    casemapping,
+                ) {
+                    buffer_data.disconnected = channel_state
+                        == history::manager::ChannelState::Disconnected;
+                    collapsible_buffers.push(buffer_data);
+                }
+            }
+
+            for query in targets.queries {
+                let muted = !show_muted_buffers
+                    && mute_config.is_some_and(|config| {
+                        config.query_muted(query, casemapping)
+                    });
+                let query =
+                    clients.resolve_query(server, query).unwrap_or(query);
+
+                if let Some(buffer_data) = upstream_buffer_data(
+                    buffer::Upstream::Query(server.clone(), query.clone()),
+                    history::Kind::Query(server.clone(), query.clone()),
+                    muted,
+                    casemapping,
+                ) {
+                    collapsible_buffers.push(buffer_data);
+                }
+            }
 
             let connection_status = match state {
                 data::client::State::Disconnected {
                     autoconnect,
                     connecting,
-                } => {
-                    if let Some(server_config) = &server_config {
-                        // Channels from the server's last connection.
-                        for channel in client::offline_sidebar_channels(
-                            server_config,
-                            history.disconnected_channels(server),
-                        ) {
-                            if let Some(mut buffer_data) = upstream_buffer_data(
-                                buffer::Upstream::Channel(
-                                    server.clone(),
-                                    channel.clone(),
-                                ),
-                                history::Kind::Channel(
-                                    server.clone(),
-                                    channel.clone(),
-                                ),
-                                server_config
-                                    .channel_muted(channel, casemapping),
-                                casemapping,
-                            ) {
-                                buffer_data.disconnected = true;
-                                collapsible_buffers.push(buffer_data);
-                            }
-                        }
-
-                        // Queries from the server's last connection.
-                        for query in history.get_unique_queries(server) {
-                            if let Some(buffer_data) = upstream_buffer_data(
-                                buffer::Upstream::Query(
-                                    server.clone(),
-                                    query.clone(),
-                                ),
-                                history::Kind::Query(
-                                    server.clone(),
-                                    query.clone(),
-                                ),
-                                !show_muted_buffers
-                                    && server_config
-                                        .query_muted(query, casemapping),
-                                casemapping,
-                            ) {
-                                collapsible_buffers.push(buffer_data);
-                            }
-                        }
-                    }
-
-                    ConnectionStatus::Disconnected {
-                        autoconnect: *autoconnect,
-                        connecting: *connecting,
-                    }
-                }
+                } => ConnectionStatus::Disconnected {
+                    autoconnect: *autoconnect,
+                    connecting: *connecting,
+                },
                 data::client::State::Ready(connection) => {
-                    // Channels from the connected server.
-                    for channel in connection
-                        .sidebar_channels(history.disconnected_channels(server))
-                    {
-                        if let Some(mut buffer_data) = upstream_buffer_data(
-                            buffer::Upstream::Channel(
-                                server.clone(),
-                                channel.clone(),
-                            ),
-                            history::Kind::Channel(
-                                server.clone(),
-                                channel.clone(),
-                            ),
-                            connection.channel_muted(channel),
-                            casemapping,
-                        ) {
-                            buffer_data.disconnected =
-                                !connection.is_joined(channel);
-                            collapsible_buffers.push(buffer_data);
-                        }
-                    }
-
-                    // Queries from the connected server.
-                    for query in history.get_unique_queries(server) {
-                        let (resolved_query, muted) = connection
-                            .resolve_query_with_muted(
-                                query,
-                                show_muted_buffers,
-                            );
-                        let query = resolved_query.unwrap_or(query);
-
-                        if let Some(buffer_data) = upstream_buffer_data(
-                            buffer::Upstream::Query(
-                                server.clone(),
-                                query.clone(),
-                            ),
-                            history::Kind::Query(server.clone(), query.clone()),
-                            muted,
-                            casemapping,
-                        ) {
-                            collapsible_buffers.push(buffer_data);
-                        }
-                    }
-
                     ConnectionStatus::Connected {
                         registration_complete: connection
                             .registration_complete(),

@@ -4200,10 +4200,6 @@ impl Client {
         self.chanmap.contains_key(channel)
     }
 
-    pub fn channel_muted(&self, channel: &target::Channel) -> bool {
-        self.config.channel_muted(channel, self.casemapping())
-    }
-
     fn channel_users_received(&mut self, target_channel: target::Channel) {
         if let Some(client_channel) = self.chanmap.get_mut(&target_channel)
             && !client_channel.users_init
@@ -4313,18 +4309,6 @@ impl Client {
             .map(|(stored_query, query_state)| {
                 query_state.query.as_ref().unwrap_or(stored_query)
             })
-    }
-
-    pub fn resolve_query_with_muted<'a>(
-        &'a self,
-        query: &target::Query,
-        show_muted_buffers: bool,
-    ) -> (Option<&'a target::Query>, bool) {
-        (
-            self.resolve_query(query),
-            !show_muted_buffers
-                && self.config.query_muted(query, self.casemapping()),
-        )
     }
 
     fn record_query(&mut self, query: &target::Query) {
@@ -4703,18 +4687,16 @@ impl Client {
 pub fn offline_sidebar_channels<'a>(
     config: &config::server::Server,
     channels: impl Iterator<Item = &'a target::Channel>,
-) -> Vec<&'a target::Channel> {
-    channels
-        .sorted_by(|a, b| {
-            compare_channels(
-                config,
-                isupport::DEFAULT_CHANTYPES,
-                isupport::CaseMap::default(),
-                a.as_normalized_str(),
-                b.as_normalized_str(),
-            )
-        })
-        .collect()
+) -> impl Iterator<Item = &'a target::Channel> {
+    channels.sorted_by(|a, b| {
+        compare_channels(
+            config,
+            isupport::DEFAULT_CHANTYPES,
+            isupport::CaseMap::default(),
+            a.as_normalized_str(),
+            b.as_normalized_str(),
+        )
+    })
 }
 
 fn compare_channels_default(chantypes: &[char], a: &str, b: &str) -> Ordering {

@@ -3530,7 +3530,7 @@ impl Dashboard {
                 );
                 let input = data::Input::from_command(buffer.clone(), command);
 
-                if !self.history.is_disconnected_channel(&server, &channel)
+                if clients.contains_channel(&server, &channel)
                     && let Some(encoded) = input.encoded()
                 {
                     clients.send_from_buffer(
@@ -3612,7 +3612,7 @@ impl Dashboard {
                 let command = command::Irc::Part(channel.to_string(), reason);
                 let input = data::Input::from_command(buffer.clone(), command);
 
-                if !self.history.is_disconnected_channel(&server, &channel)
+                if clients.contains_channel(&server, &channel)
                     && let Some(encoded) = input.encoded()
                 {
                     clients.send_from_buffer(
@@ -5827,29 +5827,16 @@ fn all_upstream_buffers(
 ) -> Vec<buffer::Upstream> {
     clients
         .iter()
-        .flat_map(|(server, state)| {
-            let disconnected = history.disconnected_channels(server);
-
-            // Matches the sidebar, which keeps the channels and queries from
-            // a disconnected server's last connection.
-            let (channels, queries) = match state {
-                client::State::Ready(client) => {
-                    Some(client.sidebar_channels(disconnected).collect())
-                }
-                client::State::Disconnected { .. } => {
-                    servers.get(server).map(|config| {
-                        client::offline_sidebar_channels(&config, disconnected)
-                    })
-                }
-            }
-            .map(|channels| (channels, history.get_unique_queries(server)))
-            .unwrap_or_default();
+        .flat_map(|(server, _)| {
+            let config = servers.get(server);
+            let targets =
+                history.sidebar_targets(server, clients, config.as_deref());
 
             std::iter::once(buffer::Upstream::Server(server.clone()))
-                .chain(channels.into_iter().map(|channel| {
+                .chain(targets.channels.into_iter().map(|(channel, _)| {
                     buffer::Upstream::Channel(server.clone(), channel.clone())
                 }))
-                .chain(queries.into_iter().map(|nick| {
+                .chain(targets.queries.into_iter().map(|nick| {
                     buffer::Upstream::Query(server.clone(), nick.clone())
                 }))
         })

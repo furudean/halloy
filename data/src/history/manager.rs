@@ -104,6 +104,28 @@ pub enum Event {
 }
 
 #[derive(Debug, Default)]
+pub struct SidebarTargets<'a> {
+    pub channels: Vec<(&'a target::Channel, ChannelState)>,
+    pub queries: Vec<&'a target::Query>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelState {
+    Joined,
+    Disconnected,
+}
+
+impl ChannelState {
+    fn new(joined: bool) -> Self {
+        if joined {
+            ChannelState::Joined
+        } else {
+            ChannelState::Disconnected
+        }
+    }
+}
+
+#[derive(Debug, Default)]
 pub struct Manager {
     resources: HashSet<Resource>,
     channel_monitor: channel_monitor::ChannelMonitor,
@@ -943,19 +965,33 @@ impl Manager {
         self.sidebar_buffers.to_vec()
     }
 
-    pub fn disconnected_channels(
-        &self,
+    pub fn sidebar_targets<'a>(
+        &'a self,
         server: &Server,
-    ) -> impl Iterator<Item = &target::Channel> {
-        self.sidebar_buffers.disconnected_channels(server)
-    }
+        clients: &'a client::Map,
+        config: Option<&config::Server>,
+    ) -> SidebarTargets<'a> {
+        let disconnected = self.sidebar_buffers.disconnected_channels(server);
 
-    pub fn is_disconnected_channel(
-        &self,
-        server: &Server,
-        channel: &target::Channel,
-    ) -> bool {
-        self.sidebar_buffers.is_disconnected(server, channel)
+        let channels = match (clients.client(server), config) {
+            (Some(client), _) => client
+                .sidebar_channels(disconnected)
+                .map(|channel| {
+                    (channel, ChannelState::new(client.is_joined(channel)))
+                })
+                .collect(),
+            (None, Some(config)) => {
+                client::offline_sidebar_channels(config, disconnected)
+                    .map(|channel| (channel, ChannelState::Disconnected))
+                    .collect()
+            }
+            (None, None) => return SidebarTargets::default(),
+        };
+
+        SidebarTargets {
+            channels,
+            queries: self.get_unique_queries(server),
+        }
     }
 
     pub fn joined_channel(

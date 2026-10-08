@@ -9,14 +9,9 @@ struct Buffers {
     queries: HashSet<target::Query>,
 }
 
-// Tracks the channels and queries shown in the sidebar, so they are saved
-// with the dashboard and can be restored on the next launch.
 #[derive(Debug, Default)]
 pub struct SidebarBuffers {
     buffers: HashMap<Server, Buffers>,
-    // Holds the channels shown in the sidebar while disconnected from them,
-    // whether restored (restoring a channel does not join it), left, or
-    // dropped with their server's connection.
     disconnected: HashMap<Server, HashSet<target::Channel>>,
     closing: HashMap<Server, HashSet<target::Channel>>,
     changed: bool,
@@ -44,16 +39,6 @@ impl SidebarBuffers {
         server: &Server,
     ) -> impl Iterator<Item = &target::Channel> {
         self.disconnected.get(server).into_iter().flatten()
-    }
-
-    pub fn is_disconnected(
-        &self,
-        server: &Server,
-        channel: &target::Channel,
-    ) -> bool {
-        self.disconnected
-            .get(server)
-            .is_some_and(|channels| channels.contains(channel))
     }
 
     pub fn left(&mut self, server: Server, channel: target::Channel) {
@@ -401,7 +386,9 @@ mod tests {
     }
 
     fn is_disconnected(buffers: &SidebarBuffers, name: &str) -> bool {
-        buffers.is_disconnected(&server(), &channel(name))
+        buffers
+            .disconnected_channels(&server())
+            .any(|disconnected| *disconnected == channel(name))
     }
 
     #[test]
