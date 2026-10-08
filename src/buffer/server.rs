@@ -386,6 +386,7 @@ pub fn view<'a>(
                 &state.input_view,
                 our_user.as_ref(),
                 false,
+                false,
                 None,
                 &state.server,
                 registry,

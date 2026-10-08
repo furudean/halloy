@@ -52,6 +52,7 @@ const CHATHISTORY_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const MODE_REQUEST_DELAY: Duration = Duration::from_millis(600);
 const MODE_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const TYPING_TIMEOUT: Duration = Duration::from_secs(6);
+const INITIAL_JOIN_GRACE: Duration = Duration::from_secs(3);
 // Upper bound on concurrently open IRCv3 batches. A server opens a batch with
 // `BATCH +<ref>` and must close it with `BATCH -<ref>`; without a ceiling a
 // malicious or buggy server could open batches without ever closing them and
@@ -227,6 +228,7 @@ pub struct Client {
     logged_in: bool,
     away: bool,
     registration_step: RegistrationStep,
+    registered_at: Option<Instant>,
     capabilities: Capabilities,
     features: Features,
     sasl_succeeded: bool,
@@ -294,6 +296,7 @@ impl Client {
             logged_in: false,
             away: false,
             registration_step: RegistrationStep::Start,
+            registered_at: None,
             capabilities: Capabilities::default(),
             features: Features::default(),
             sasl_succeeded: false,
@@ -3130,6 +3133,7 @@ impl Client {
                 }
 
                 self.registration_step = RegistrationStep::Complete;
+                self.registered_at = Some(Instant::now());
 
                 if let Some(id) = self.server.bouncer_netid()
                     && self.resolved_netid.is_none()
@@ -4245,6 +4249,14 @@ impl Client {
         self.chanmap.contains_key(channel)
     }
 
+    pub fn is_join_pending(&self, channel: &target::Channel) -> bool {
+        // a short grace period to delay showing the "Join channel" banner
+        // as to not show it on startup
+        self.registered_at.is_none_or(|registered_at| {
+            registered_at.elapsed() < INITIAL_JOIN_GRACE
+        }) || self.registration_required_channels.contains(channel)
+    }
+
     fn channel_users_received(&mut self, target_channel: target::Channel) {
         if let Some(client_channel) = self.chanmap.get_mut(&target_channel)
             && !client_channel.users_init
@@ -5268,6 +5280,14 @@ impl Map {
         chan: &target::Channel,
     ) -> bool {
         self.client(server).is_some_and(|c| c.is_joined(chan))
+    }
+
+    pub fn is_channel_join_pending(
+        &self,
+        server: &Server,
+        chan: &target::Channel,
+    ) -> bool {
+        self.client(server).is_some_and(|c| c.is_join_pending(chan))
     }
 
     pub fn resolve_query<'a>(

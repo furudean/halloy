@@ -1,8 +1,8 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
-use std::convert;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::{convert, slice};
 
 use chrono::{DateTime, Utc};
 use data::buffer::{self, Upstream};
@@ -134,6 +134,7 @@ pub enum Message {
         to_nick: Nick,
     },
     ClearDraftReply,
+    JoinChannel,
     NavigateFocus(FocusDirection),
     ExitFocus,
     FocusAction(FocusAction),
@@ -217,6 +218,7 @@ pub fn view<'a>(
     state: &'a State,
     our_user: Option<&User>,
     disconnected: bool,
+    show_join_banner: bool,
     channel_users: Option<&'a ChannelUsers>,
     server: &'a Server,
     registry: &'a dyn metadata::Registry,
@@ -526,8 +528,14 @@ pub fn view<'a>(
     )
     .padding(8);
 
-    let styled_input =
-        container(input_row).style(theme::container::buffer_text_input);
+    let join_banner: Element<'a, Message> = if show_join_banner {
+        join_banner(config)
+    } else {
+        column![].into()
+    };
+
+    let styled_input = container(column![join_banner, input_row])
+        .style(theme::container::buffer_text_input);
 
     let input_column = column![
         if let Some(bar) = maybe_reply_bar {
@@ -694,6 +702,36 @@ fn reply_bar<'a>(
     )
     .padding([2, 8])
     .into()
+}
+
+fn join_banner<'a>(config: &'a Config) -> Element<'a, Message> {
+    let font_size = config.font.size.map_or(theme::TEXT_SIZE, f32::from);
+
+    let banner = column![
+        rule::horizontal(1.0).style(theme::rule::primary),
+        container(
+            row![
+                text("You are not in this channel")
+                    .size(font_size)
+                    .line_height(1.0)
+                    .style(theme::text::primary)
+                    .width(Length::Fill),
+                button(text("Join").size(font_size - 1.0).line_height(1.0))
+                    .padding([3, 6])
+                    .style(|theme, status| {
+                        theme::button::secondary(theme, status, false)
+                    })
+                    .on_press(Message::JoinChannel),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        )
+        .padding([4, 7])
+        .style(theme::container::buffer_background),
+        rule::horizontal(1.0).style(theme::rule::primary),
+    ];
+
+    container(banner).padding([0, 1]).into()
 }
 
 fn notice_view<'a, 'b, Message: 'a>(
@@ -1503,6 +1541,13 @@ impl State {
             }
             Message::ClearDraftReply => {
                 let _ = self.clear_draft_reply(buffer, history, config);
+
+                (self.focus(), None)
+            }
+            Message::JoinChannel => {
+                if let Upstream::Channel(server, channel) = buffer {
+                    clients.join(server, slice::from_ref(channel));
+                }
 
                 (self.focus(), None)
             }

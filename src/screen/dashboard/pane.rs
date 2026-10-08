@@ -89,15 +89,8 @@ impl Pane {
                     !clients.contains_channel(server, &state.target);
 
                 let state_text = disconnected.then(|| {
-                    container(
-                        text("(Disconnected)")
-                            .style(theme::text::error)
-                            .font_maybe(
-                                theme::font_style::error(theme).map(font::get),
-                            )
-                            .wrapping(Wrapping::None),
-                    )
-                    .padding(Padding::default().left(5))
+                    container(text("(Parted)").wrapping(Wrapping::None))
+                        .padding(Padding::default().left(5))
                 });
 
                 row![
