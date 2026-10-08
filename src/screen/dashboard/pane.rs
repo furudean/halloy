@@ -85,10 +85,12 @@ impl Pane {
                 };
 
                 let server = &state.server;
-                let disconnected =
-                    !clients.contains_channel(server, &state.target);
 
-                let state_text = disconnected.then(|| {
+                let not_joined = !clients
+                    .contains_channel(server, &state.target)
+                    && !clients.is_channel_join_pending(server, &state.target);
+
+                let state_text = not_joined.then(|| {
                     container(text("(Parted)").wrapping(Wrapping::None))
                         .padding(Padding::default().left(5))
                 });

@@ -15,7 +15,9 @@ pub struct SidebarBuffers {
     disconnected: HashMap<Server, HashSet<target::Channel>>,
     closing: HashMap<Server, HashSet<target::Channel>>,
     removed: HashSet<Server>,
+    remember_buffers: bool,
     changed: bool,
+    dirty: bool,
     exited: bool,
 }
 
@@ -42,16 +44,25 @@ impl SidebarBuffers {
         self.disconnected.get(server).into_iter().flatten()
     }
 
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
     pub fn mark_channel_disconnected(
         &mut self,
         server: Server,
         channel: target::Channel,
     ) {
-        if self
-            .closing
-            .get(&server)
-            .is_some_and(|channels| channels.contains(&channel))
+        self.dirty = true;
+
+        // The PART of a closed channel completes the close.
+        if let Some(channels) = self.closing.get_mut(&server)
+            && channels.remove(&channel)
         {
+            if channels.is_empty() {
+                self.closing.remove(&server);
+            }
+
             return;
         }
 
@@ -63,21 +74,30 @@ impl SidebarBuffers {
         server: &Server,
         channel: &target::Channel,
     ) {
+        self.dirty = true;
         self.unmark_disconnected(server, channel);
     }
 
-    pub fn forget_closed_channel(&mut self, kind: &history::Kind) {
+    pub fn forget_closed_channel(
+        &mut self,
+        kind: &history::Kind,
+        clients: &client::Map,
+    ) {
         if let history::Kind::Channel(server, channel) = kind {
+            self.dirty = true;
             self.unmark_disconnected(server, channel);
 
             if let Some(buffers) = self.buffers.get_mut(server) {
                 self.changed |= buffers.channels.remove(channel);
             }
 
-            self.closing
-                .entry(server.clone())
-                .or_default()
-                .insert(channel.clone());
+            // Only a joined channel has a PART in flight.
+            if clients.contains_channel(server, channel) {
+                self.closing
+                    .entry(server.clone())
+                    .or_default()
+                    .insert(channel.clone());
+            }
         }
     }
 
@@ -86,6 +106,8 @@ impl SidebarBuffers {
         server: &Server,
         clients: &client::Map,
     ) {
+        self.dirty = true;
+
         let closing = self.closing.remove(server);
 
         let channels = clients
@@ -107,6 +129,8 @@ impl SidebarBuffers {
     }
 
     pub fn forget_server(&mut self, server: &Server) {
+        self.dirty = true;
+
         if self.buffers.remove(server).is_some() {
             self.changed = true;
         }
@@ -162,6 +186,11 @@ impl SidebarBuffers {
             return false;
         }
 
+        if remember_buffers != self.remember_buffers {
+            self.remember_buffers = remember_buffers;
+            self.dirty = true;
+        }
+
         if !remember_buffers {
             let cleared = self.buffers.values().any(|buffers| {
                 !buffers.channels.is_empty() || !buffers.queries.is_empty()
@@ -169,12 +198,25 @@ impl SidebarBuffers {
 
             self.buffers.clear();
             self.changed = false;
-            self.prune_closing(clients);
+            self.dirty = false;
 
             return cleared;
         }
 
+        // A removed server that connects again has its queries saved again.
+        if self
+            .removed
+            .iter()
+            .any(|server| clients.client(server).is_some())
+        {
+            self.dirty = true;
+        }
+
         let mut changed = std::mem::take(&mut self.changed);
+
+        if !std::mem::take(&mut self.dirty) {
+            return changed;
+        }
 
         for server in clients.connected_servers() {
             self.removed.remove(server);
@@ -203,8 +245,6 @@ impl SidebarBuffers {
             }
         }
 
-        self.prune_closing(clients);
-
         let removed = &self.removed;
         let queries =
             queries.filter(move |(server, _)| !removed.contains(*server));
@@ -230,15 +270,6 @@ impl SidebarBuffers {
         });
 
         changed
-    }
-
-    fn prune_closing(&mut self, clients: &client::Map) {
-        for (server, channels) in &mut self.closing {
-            channels
-                .retain(|channel| clients.contains_channel(server, channel));
-        }
-
-        self.closing.retain(|_, channels| !channels.is_empty());
     }
 
     fn queries_unchanged<'a>(
@@ -424,11 +455,11 @@ mod tests {
         buffers.update_saved(std::iter::empty(), clients, false)
     }
 
-    fn close(buffers: &mut SidebarBuffers, name: &str) {
-        buffers.forget_closed_channel(&history::Kind::Channel(
-            server(),
-            channel(name),
-        ));
+    fn close(clients: &client::Map, buffers: &mut SidebarBuffers, name: &str) {
+        buffers.forget_closed_channel(
+            &history::Kind::Channel(server(), channel(name)),
+            clients,
+        );
     }
 
     fn is_saved(buffers: &SidebarBuffers, name: &str) -> bool {
@@ -536,7 +567,7 @@ mod tests {
         update(&mut buffers, &clients);
 
         // The PART is in flight, so the channel is still joined.
-        close(&mut buffers, "#halloy");
+        close(&clients, &mut buffers, "#halloy");
         disconnect(&mut clients, &mut buffers);
         update(&mut buffers, &clients);
         assert!(!is_saved(&buffers, "#halloy"));
@@ -578,7 +609,7 @@ mod tests {
         join(&mut clients, &mut buffers, "#halloy");
         update(&mut buffers, &clients);
 
-        close(&mut buffers, "#halloy");
+        close(&clients, &mut buffers, "#halloy");
         part(&mut clients, &mut buffers, "#halloy");
         assert!(update(&mut buffers, &clients));
         assert!(!is_saved(&buffers, "#halloy"));
@@ -593,7 +624,7 @@ mod tests {
         join(&mut clients, &mut buffers, "#halloy");
         update(&mut buffers, &clients);
 
-        close(&mut buffers, "#halloy");
+        close(&clients, &mut buffers, "#halloy");
 
         // The PART is in flight, so the channel is still joined.
         assert!(update(&mut buffers, &clients));
@@ -702,7 +733,7 @@ mod tests {
         join(&mut clients, &mut buffers, "#halloy");
         update(&mut buffers, &clients);
 
-        close(&mut buffers, "#halloy");
+        close(&clients, &mut buffers, "#halloy");
 
         // Mirrors the dashboard, which updates once more before exiting.
         update(&mut buffers, &clients);
@@ -719,7 +750,7 @@ mod tests {
         join(&mut clients, &mut buffers, "#halloy");
         update(&mut buffers, &clients);
 
-        close(&mut buffers, "#halloy");
+        close(&clients, &mut buffers, "#halloy");
         update(&mut buffers, &clients);
 
         disconnect(&mut clients, &mut buffers);
@@ -738,7 +769,7 @@ mod tests {
         kick(&mut clients, &mut buffers, "#halloy");
         update(&mut buffers, &clients);
 
-        close(&mut buffers, "#halloy");
+        close(&clients, &mut buffers, "#halloy");
         assert!(update(&mut buffers, &clients));
         assert!(!is_saved(&buffers, "#halloy"));
         assert!(!is_disconnected(&buffers, "#halloy"));
@@ -773,7 +804,7 @@ mod tests {
         update_disabled(&mut buffers, &clients);
         assert!(!is_disconnected(&buffers, "#halloy"));
 
-        close(&mut buffers, "#rust");
+        close(&clients, &mut buffers, "#rust");
         update_disabled(&mut buffers, &clients);
         assert!(!is_disconnected(&buffers, "#rust"));
     }
@@ -786,7 +817,7 @@ mod tests {
         join(&mut clients, &mut buffers, "#halloy");
         update_disabled(&mut buffers, &clients);
 
-        close(&mut buffers, "#halloy");
+        close(&clients, &mut buffers, "#halloy");
         update_disabled(&mut buffers, &clients);
         part(&mut clients, &mut buffers, "#halloy");
         update_disabled(&mut buffers, &clients);

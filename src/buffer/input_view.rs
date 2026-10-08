@@ -2298,27 +2298,25 @@ impl State {
 
                             // The replaced channel is closed, so its PART does
                             // not keep it open.
-                            let history_task = buffer
-                                .channel()
-                                .filter(|channel| {
+                            if let Some(channel) =
+                                buffer.channel().filter(|channel| {
                                     target.as_channel() != Some(*channel)
                                 })
-                                .and_then(|channel| {
-                                    history.close(
-                                        history::Kind::Channel(
+                            {
+                                history
+                                    .sidebar_buffers_mut()
+                                    .forget_closed_channel(
+                                        &history::Kind::Channel(
                                             buffer.server().clone(),
                                             channel.clone(),
                                         ),
                                         clients,
-                                        &config.buffer.server_messages,
-                                    )
-                                })
-                                .map_or_else(Task::none, Task::future);
+                                    );
+                            }
 
-                            Event::InputSent {
-                                history_task,
-                                open_buffers: vec![(target, buffer_action)],
-                                was_join_command: false,
+                            Event::OpenBuffers {
+                                server: buffer.server().clone(),
+                                targets: vec![(target, buffer_action)],
                             }
                         });
 

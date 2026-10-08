@@ -875,10 +875,12 @@ impl Halloy {
                         return Task::none();
                     };
 
-                    dashboard.mark_server_channels_disconnected(
-                        &server,
-                        &self.clients,
-                    );
+                    dashboard
+                        .sidebar_buffers_mut()
+                        .mark_server_channels_disconnected(
+                            &server,
+                            &self.clients,
+                        );
 
                     self.clients.disconnected(server.clone(), autoconnect);
 
@@ -1871,7 +1873,9 @@ impl Halloy {
 
                     self.clients.remove(&bouncer_network);
 
-                    dashboard.forget_server(&bouncer_network);
+                    dashboard
+                        .sidebar_buffers_mut()
+                        .forget_server(&bouncer_network);
                 }
 
                 self.controllers.end(
@@ -1883,7 +1887,7 @@ impl Halloy {
 
                 self.clients.remove(&server);
 
-                dashboard.forget_server(&server);
+                dashboard.sidebar_buffers_mut().forget_server(&server);
 
                 Task::none()
             }
@@ -2011,10 +2015,14 @@ fn handle_client_events(
                 );
             }
             Event::LeftChannel(channel) => {
-                dashboard.mark_channel_disconnected(server.clone(), channel);
+                dashboard
+                    .sidebar_buffers_mut()
+                    .mark_channel_disconnected(server.clone(), channel);
             }
             Event::JoinedChannel(channel, server_time) => {
-                dashboard.mark_channel_joined(server, &channel);
+                dashboard
+                    .sidebar_buffers_mut()
+                    .mark_channel_joined(server, &channel);
 
                 commands.push(
                     dashboard
@@ -2158,7 +2166,9 @@ fn handle_client_events(
                 );
             }
             Event::BouncerNetworksListed(listed) => {
-                dashboard.forget_unlisted_bouncer_networks(server, &listed);
+                dashboard
+                    .sidebar_buffers_mut()
+                    .forget_unlisted_bouncer_networks(server, &listed);
             }
             Event::AddToSidebar(query) => {
                 dashboard.add_to_sidebar(server.clone(), query);

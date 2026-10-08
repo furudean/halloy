@@ -17,6 +17,7 @@ use data::history::ReadMarker;
 use data::history::filter::Filter;
 use data::history::manager::EchoEvent;
 use data::history::reroute::RerouteRules;
+use data::history::sidebar_buffers::SidebarBuffers;
 use data::isupport::{self, ChatHistorySubcommand, MessageReference};
 use data::message::{self, Broadcast};
 use data::rate_limit::TokenPriority;
@@ -4290,43 +4291,8 @@ impl Dashboard {
         self.history.get_unique_queries(server)
     }
 
-    pub fn mark_channel_joined(
-        &mut self,
-        server: &Server,
-        channel: &target::Channel,
-    ) {
-        self.history.mark_channel_joined(server, channel);
-    }
-
-    pub fn mark_channel_disconnected(
-        &mut self,
-        server: Server,
-        channel: target::Channel,
-    ) {
-        self.history.mark_channel_disconnected(server, channel);
-    }
-
-    // Must be called before the server's client is dropped.
-    pub fn mark_server_channels_disconnected(
-        &mut self,
-        server: &Server,
-        clients: &data::client::Map,
-    ) {
-        self.history
-            .mark_server_channels_disconnected(server, clients);
-    }
-
-    pub fn forget_server(&mut self, server: &Server) {
-        self.history.forget_server(server);
-    }
-
-    pub fn forget_unlisted_bouncer_networks(
-        &mut self,
-        parent: &Server,
-        listed: &[Server],
-    ) {
-        self.history
-            .forget_unlisted_bouncer_networks(parent, listed);
+    pub fn sidebar_buffers_mut(&mut self) -> &mut SidebarBuffers {
+        self.history.sidebar_buffers_mut()
     }
 
     pub fn add_to_sidebar(&mut self, server: Server, query: target::Query) {

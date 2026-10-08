@@ -267,8 +267,10 @@ impl Sidebar {
                     }),
                     casemapping,
                 ) {
-                    buffer_data.disconnected = channel_state
-                        == history::manager::ChannelState::Disconnected;
+                    buffer_data.disconnected =
+                        channel_state != history::manager::ChannelState::Joined;
+                    buffer_data.join_pending = channel_state
+                        == history::manager::ChannelState::Joining;
                     collapsible_buffers.push(buffer_data);
                 }
             }
@@ -876,6 +878,7 @@ impl Sidebar {
                                 kind: buffer_data.kind,
                                 indicators: buffer_data.indicators,
                                 disconnected: buffer_data.disconnected,
+                                join_pending: buffer_data.join_pending,
                                 connection_status,
                                 server_has_collapsible_buffers:
                                     has_collapsible_buffers,
@@ -1058,6 +1061,7 @@ struct UpstreamBufferSidebarData {
     has_highlight: bool,
     indicators: IndicatorState,
     disconnected: bool,
+    join_pending: bool,
 }
 
 impl UpstreamBufferSidebarData {
@@ -1123,6 +1127,7 @@ impl UpstreamBufferSidebarData {
             has_highlight,
             indicators,
             disconnected: false,
+            join_pending: false,
         })
     }
 
@@ -1306,6 +1311,7 @@ impl Entry {
         supports_detach: bool,
         has_history: bool,
         disconnected: bool,
+        join_pending: bool,
     ) -> Vec<Self> {
         use Entry::*;
 
@@ -1359,7 +1365,9 @@ impl Entry {
 
         if connected {
             if disconnected {
-                entries.push(Join);
+                if !join_pending {
+                    entries.push(Join);
+                }
             } else if matches!(
                 buffer,
                 buffer::Buffer::Upstream(buffer::Upstream::Channel(_, _))
@@ -1414,6 +1422,7 @@ struct UpstreamButtonContext<'a> {
     kind: history::Kind,
     indicators: IndicatorState,
     disconnected: bool,
+    join_pending: bool,
     connection_status: ConnectionStatus,
     server_has_collapsible_buffers: bool,
     server_has_unread: bool,
@@ -1825,6 +1834,7 @@ fn upstream_buffer_context_menu<'a>(
         focus,
         buffer,
         disconnected,
+        join_pending,
         connection_status,
         server_has_unread,
         supports_detach,
@@ -1844,6 +1854,7 @@ fn upstream_buffer_context_menu<'a>(
         supports_detach,
         true,
         disconnected,
+        join_pending,
     );
 
     if entries.is_empty() {
@@ -2228,6 +2239,7 @@ fn internal_buffer_button<'a>(
         None,
         false,
         kind.is_some(),
+        false,
         false,
     );
 

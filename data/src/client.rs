@@ -239,6 +239,8 @@ pub struct Client {
     chathistory_targets_request: Option<ChatHistoryRequest>,
     notification_blackout: NotificationBlackout,
     registration_required_channels: Vec<target::Channel>,
+    pending_joins: HashSet<target::Channel>,
+    bouncer_network_listing: Option<Vec<Server>>,
     isupport: HashMap<isupport::Kind, isupport::Parameter>,
     who_queue: who_queue::WhoQueue,
     resolved_netid: Option<String>,
@@ -308,6 +310,8 @@ impl Client {
                 Instant::now(),
             ),
             registration_required_channels: vec![],
+            pending_joins: HashSet::new(),
+            bouncer_network_listing: None,
             isupport: HashMap::new(),
             who_queue: who_queue::WhoQueue::new(&config),
             resolved_netid: None,
@@ -594,9 +598,11 @@ impl Client {
     }
 
     fn join(&mut self, channels: &[target::Channel]) {
+        let keys = HashMap::new();
+
         let messages = group_joins(
             channels,
-            &self.config.channel_keys,
+            &keys,
             find_target_limit(&self.isupport, "JOIN"),
         )
         .map(Into::into)
@@ -604,6 +610,52 @@ impl Client {
 
         for message in messages {
             self.send(None, message, TokenPriority::High);
+        }
+    }
+
+    // A JOIN stays pending until the server answers with our JOIN or an error.
+    fn track_pending_joins(&mut self, channels: &str) {
+        if self.registration_step != RegistrationStep::Complete {
+            return;
+        }
+
+        for channel in channels.split(',') {
+            if let Ok(channel) = target::Channel::parse(
+                channel,
+                self.chantypes(),
+                self.statusmsg(),
+                self.casemapping(),
+            ) && !self.chanmap.contains_key(&channel)
+            {
+                self.pending_joins.insert(channel);
+            }
+        }
+    }
+
+    fn resolve_failed_join(&mut self, command: &Command) {
+        let (code, args) = match command {
+            Command::Numeric(numeric, args) => (*numeric as u16, args),
+            Command::Unknown(tag, args) => {
+                let Ok(code) = tag.parse::<u16>() else {
+                    return;
+                };
+
+                (code, args)
+            }
+            _ => return,
+        };
+
+        // Error replies name the channel after our nick.
+        if (400..600).contains(&code)
+            && let Some(channel) = args.get(1)
+            && let Ok(channel) = target::Channel::parse(
+                channel,
+                self.chantypes(),
+                self.statusmsg(),
+                self.casemapping(),
+            )
+        {
+            self.pending_joins.remove(&channel);
         }
     }
 
@@ -715,6 +767,10 @@ impl Client {
             self.set_labeled_response_context(buffer, &mut message);
 
         let mut restore_automated_monitored_users: Vec<String> = vec![];
+
+        if let Command::JOIN(channels, _) = &message.command {
+            self.track_pending_joins(channels);
+        }
 
         if matches!(priority, TokenPriority::User) {
             match &message.command {
@@ -1046,6 +1102,10 @@ impl Client {
 
         let mut left_channel = None;
 
+        if !self.pending_joins.is_empty() {
+            self.resolve_failed_join(&message.command);
+        }
+
         match &message.command {
             Command::BATCH(batch, params) => {
                 let mut chars = batch.chars();
@@ -1116,6 +1176,8 @@ impl Client {
                                 Some(BatchKind::LabeledResponse)
                             }
                             Some("soju.im/bouncer-networks") => {
+                                self.bouncer_network_listing = Some(vec![]);
+
                                 Some(BatchKind::BouncerNetworks)
                             }
                             _ => None,
@@ -1169,18 +1231,9 @@ impl Client {
 
                             if let Some(BatchKind::BouncerNetworks) =
                                 &finished.kind
+                                && let Some(listed) =
+                                    self.bouncer_network_listing.take()
                             {
-                                let listed = finished
-                                    .events
-                                    .iter()
-                                    .filter_map(|event| match event {
-                                        Event::BouncerNetwork(server, _) => {
-                                            Some(server.clone())
-                                        }
-                                        _ => None,
-                                    })
-                                    .collect();
-
                                 finished
                                     .events
                                     .push(Event::BouncerNetworksListed(listed));
@@ -1374,6 +1427,10 @@ impl Client {
                 }
             }
             Command::BOUNCER(subcommand, params) if subcommand == "NETWORK" => {
+                // The listing is incomplete if any network in it is skipped,
+                // so it is only put back once this network is read.
+                let listing = self.bouncer_network_listing.take();
+
                 // Only the bouncer control connection discovers networks.
                 if self.connection_role() != ConnectionRole::BouncerControl {
                     return Ok(vec![]);
@@ -1398,18 +1455,22 @@ impl Client {
                 }
 
                 let network = BouncerNetwork::parse(netid, network)?;
-                let Some(network_config) =
-                    self.config.bouncer_network_config(&network)
-                else {
+                let network_config =
+                    self.config.bouncer_network_config(&network);
+                let server = Server {
+                    network: Some(network.into()),
+                    ..self.server.clone()
+                };
+
+                self.bouncer_network_listing = listing.map(|mut listed| {
+                    listed.push(server.clone());
+                    listed
+                });
+
+                let Some(network_config) = network_config else {
                     return Ok(vec![]);
                 };
-                return Ok(vec![Event::BouncerNetwork(
-                    Server {
-                        network: Some(network.into()),
-                        ..self.server.clone()
-                    },
-                    network_config,
-                )]);
+                return Ok(vec![Event::BouncerNetwork(server, network_config)]);
             }
             Command::CAP(_, sub, a, b) if sub == "LS" => {
                 let (caps, asterisk) = match (a, b) {
@@ -2025,6 +2086,8 @@ impl Client {
                 ));
 
                 if user.nickname() == self.nickname() {
+                    self.pending_joins.remove(&target_channel);
+
                     let casemapping = self.casemapping();
                     let chantypes = self.chantypes().to_vec();
                     let _ = self.chanmap.insert_sorted_by(
@@ -4250,11 +4313,13 @@ impl Client {
     }
 
     pub fn is_join_pending(&self, channel: &target::Channel) -> bool {
-        // a short grace period to delay showing the "Join channel" banner
-        // as to not show it on startup
-        self.registered_at.is_none_or(|registered_at| {
-            registered_at.elapsed() < INITIAL_JOIN_GRACE
-        }) || self.registration_required_channels.contains(channel)
+        // Bouncers and services may join channels on their own right after
+        // registration, so give those JOINs a short grace period.
+        self.pending_joins.contains(channel)
+            || self.registration_required_channels.contains(channel)
+            || self.registered_at.is_none_or(|registered_at| {
+                registered_at.elapsed() < INITIAL_JOIN_GRACE
+            })
     }
 
     fn channel_users_received(&mut self, target_channel: target::Channel) {
@@ -6719,5 +6784,144 @@ mod tests {
         );
 
         assert_eq!(channel_user_is_away(&client, "tester"), Some(false));
+    }
+
+    fn registered_client(nickname: &str) -> Client {
+        let mut client = test_client(nickname);
+
+        client.registration_step = RegistrationStep::Complete;
+        client.registered_at = Instant::now().checked_sub(INITIAL_JOIN_GRACE);
+
+        client
+    }
+
+    fn channel(name: &str) -> target::Channel {
+        target::Channel::parse(
+            name,
+            isupport::DEFAULT_CHANTYPES,
+            &[],
+            isupport::CaseMap::default(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn join_is_pending_until_joined() {
+        let mut client = registered_client("tester");
+        let config = config::Config::default();
+
+        client.join(&[channel("#test")]);
+        assert!(client.is_join_pending(&channel("#test")));
+
+        deliver(
+            &mut client,
+            &config,
+            proto::Source::User(proto::User {
+                nickname: "tester".to_string(),
+                username: Some("tester".to_string()),
+                hostname: Some("example.test".to_string()),
+            }),
+            Command::JOIN("#test".to_string(), None),
+        );
+        assert!(client.is_joined(&channel("#test")));
+        assert!(!client.is_join_pending(&channel("#test")));
+    }
+
+    #[test]
+    fn join_is_not_pending_after_error() {
+        use irc::proto::command::Numeric::*;
+
+        let mut client = registered_client("tester");
+        let config = config::Config::default();
+
+        client.join(&[channel("#test"), channel("#rust")]);
+
+        deliver(
+            &mut client,
+            &config,
+            proto::Source::Server("irc.test".to_string()),
+            Command::Numeric(
+                ERR_BADCHANNELKEY,
+                vec![
+                    "tester".to_string(),
+                    "#test".to_string(),
+                    "Cannot join channel (+k)".to_string(),
+                ],
+            ),
+        );
+        assert!(!client.is_join_pending(&channel("#test")));
+        assert!(client.is_join_pending(&channel("#rust")));
+    }
+
+    fn list_bouncer_networks(
+        sasl_succeeded: bool,
+        networks: &[&str],
+    ) -> Option<Vec<Server>> {
+        let mut client = test_client("tester");
+        let config = config::Config::default();
+        let source = proto::Source::Server("bouncer.test".to_string());
+
+        client
+            .capabilities
+            .acknowledge(std::iter::once("soju.im/bouncer-networks".into()));
+        client.sasl_succeeded = sasl_succeeded;
+
+        let mut receive = |tags: &[(&str, &str)], command| {
+            client
+                .handle(
+                    message::Encoded(proto::Message {
+                        tags: tags
+                            .iter()
+                            .map(|(k, v)| (k.to_string(), v.to_string()))
+                            .collect(),
+                        source: Some(source.clone()),
+                        command,
+                    }),
+                    None,
+                    &config,
+                )
+                .unwrap_or_default()
+        };
+
+        receive(
+            &[],
+            Command::BATCH(
+                "+1".to_string(),
+                vec!["soju.im/bouncer-networks".to_string()],
+            ),
+        );
+
+        for (id, network) in networks.iter().enumerate() {
+            receive(
+                &[("batch", "1")],
+                Command::BOUNCER(
+                    "NETWORK".to_string(),
+                    vec![id.to_string(), network.to_string()],
+                ),
+            );
+        }
+
+        receive(&[], Command::BATCH("-1".to_string(), vec![]))
+            .into_iter()
+            .find_map(|event| match event {
+                Event::BouncerNetworksListed(listed) => Some(listed),
+                _ => None,
+            })
+    }
+
+    #[test]
+    fn complete_bouncer_listing_is_reported() {
+        let listed = list_bouncer_networks(true, &["name=Libera", "name=OFTC"]);
+
+        assert_eq!(listed.map(|listed| listed.len()), Some(2));
+    }
+
+    #[test]
+    fn incomplete_bouncer_listing_is_not_reported() {
+        // A network that fails to parse
+        assert!(list_bouncer_networks(true, &["name=Libera", ""]).is_none());
+
+        // Networks skipped without SASL
+        assert!(list_bouncer_networks(false, &["name=Libera"]).is_none());
     }
 }

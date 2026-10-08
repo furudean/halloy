@@ -110,13 +110,16 @@ pub struct SidebarTargets<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelState {
     Joined,
+    Joining,
     Disconnected,
 }
 
 impl ChannelState {
-    fn new(joined: bool) -> Self {
-        if joined {
+    fn new(client: &client::Client, channel: &target::Channel) -> Self {
+        if client.is_joined(channel) {
             ChannelState::Joined
+        } else if client.is_join_pending(channel) {
+            ChannelState::Joining
         } else {
             ChannelState::Disconnected
         }
@@ -399,6 +402,7 @@ impl Manager {
     }
 
     pub fn set_filters(&mut self, mut new_filters: Vec<Filter>) {
+        self.data.sidebar_queries_changed = true;
         self.filters.clear();
         self.filters.append(&mut new_filters);
         log::debug!(
@@ -407,6 +411,7 @@ impl Manager {
     }
 
     pub fn get_filters_mut(&mut self) -> &mut Vec<Filter> {
+        self.data.sidebar_queries_changed = true;
         &mut self.filters
     }
 
@@ -437,7 +442,8 @@ impl Manager {
         clients: &client::Map,
         server_messages_config: &config::buffer::ServerMessages,
     ) -> Option<impl Future<Output = Message> + use<>> {
-        self.sidebar_buffers.forget_closed_channel(&kind);
+        self.sidebar_buffers.forget_closed_channel(&kind, clients);
+        self.data.sidebar_queries_changed = true;
 
         let history = self.data.map.remove(&kind)?;
         let seed = clients.get_seed(&kind);
@@ -452,6 +458,8 @@ impl Manager {
     }
 
     pub fn open(&mut self, kind: history::Kind) {
+        self.data.sidebar_queries_changed = true;
+
         let history = self
             .data
             .map
@@ -938,6 +946,10 @@ impl Manager {
         clients: &client::Map,
         remember_buffers: bool,
     ) -> bool {
+        if std::mem::take(&mut self.data.sidebar_queries_changed) {
+            self.sidebar_buffers.mark_dirty();
+        }
+
         self.sidebar_buffers.update_saved(
             sidebar_queries(&self.data.map, &self.filters),
             clients,
@@ -960,9 +972,7 @@ impl Manager {
         let channels = match (clients.client(server), config) {
             (Some(client), _) => client
                 .sidebar_channels(disconnected)
-                .map(|channel| {
-                    (channel, ChannelState::new(client.is_joined(channel)))
-                })
+                .map(|channel| (channel, ChannelState::new(client, channel)))
                 .collect(),
             (None, Some(config)) => {
                 client::offline_sidebar_channels(config, disconnected)
@@ -978,43 +988,8 @@ impl Manager {
         }
     }
 
-    pub fn mark_channel_joined(
-        &mut self,
-        server: &Server,
-        channel: &target::Channel,
-    ) {
-        self.sidebar_buffers.mark_channel_joined(server, channel);
-    }
-
-    pub fn mark_channel_disconnected(
-        &mut self,
-        server: Server,
-        channel: target::Channel,
-    ) {
-        self.sidebar_buffers
-            .mark_channel_disconnected(server, channel);
-    }
-
-    pub fn mark_server_channels_disconnected(
-        &mut self,
-        server: &Server,
-        clients: &client::Map,
-    ) {
-        self.sidebar_buffers
-            .mark_server_channels_disconnected(server, clients);
-    }
-
-    pub fn forget_server(&mut self, server: &Server) {
-        self.sidebar_buffers.forget_server(server);
-    }
-
-    pub fn forget_unlisted_bouncer_networks(
-        &mut self,
-        parent: &Server,
-        listed: &[Server],
-    ) {
-        self.sidebar_buffers
-            .forget_unlisted_bouncer_networks(parent, listed);
+    pub fn sidebar_buffers_mut(&mut self) -> &mut SidebarBuffers {
+        &mut self.sidebar_buffers
     }
 
     pub fn restore_saved_buffers(
@@ -1709,6 +1684,7 @@ fn sidebar_queries<'a>(
 struct Data {
     map: HashMap<history::Kind, History>,
     input: input::Storage,
+    sidebar_queries_changed: bool,
 }
 
 impl Data {
@@ -1721,6 +1697,9 @@ impl Data {
         buffer_config: &config::Buffer,
     ) {
         use std::collections::hash_map;
+
+        self.sidebar_queries_changed |=
+            matches!(kind, history::Kind::Query(..));
 
         let history::Loaded {
             mut messages,
@@ -2001,13 +1980,20 @@ impl Data {
             message.reply_preview = Some(reply_target.as_reply_preview());
         }
 
+        let is_query = matches!(kind, history::Kind::Query(..));
+
         match self.map.entry(kind.clone()) {
             hash_map::Entry::Occupied(mut entry) => {
+                let was_shown = entry.get().shown_in_sidebar();
+
                 let read_marker = entry.get_mut().add_message(
                     message,
                     labeled_response_context,
                     server_messages_config,
                 );
+
+                self.sidebar_queries_changed |=
+                    is_query && was_shown != entry.get().shown_in_sidebar();
 
                 // Update the read marker immediately so the split is correct
                 if let Some(read_marker) = read_marker
@@ -2027,12 +2013,16 @@ impl Data {
                 }
             }
             hash_map::Entry::Vacant(entry) => {
-                let _ =
-                    entry.insert(History::partial(kind.clone())).add_message(
-                        message,
-                        labeled_response_context,
-                        server_messages_config,
-                    );
+                let history = entry.insert(History::partial(kind.clone()));
+
+                let _ = history.add_message(
+                    message,
+                    labeled_response_context,
+                    server_messages_config,
+                );
+
+                self.sidebar_queries_changed |=
+                    is_query && history.shown_in_sidebar();
 
                 Some(
                     async move {
