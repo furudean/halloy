@@ -130,7 +130,9 @@ pub enum Event {
     MonitoredOffline(Vec<Nick>),
     OnConnect(on_connect::Stream),
     BouncerNetwork(Server, Arc<config::Server>),
+    BouncerNetworksListed(Vec<Server>),
     ShowInSidebar(Target),
+    LeftChannel(target::Channel),
     AuthenticationFailed(Option<String>),
     UpdateIcon,
 }
@@ -188,6 +190,8 @@ pub struct Client {
     chathistory_targets_request: Option<ChathistoryRequest>,
     notification_blackout: NotificationBlackout,
     registration_required_channels: Vec<target::Channel>,
+    pending_joins: HashSet<target::Channel>,
+    bouncer_network_listing: Option<Vec<Server>>,
     isupport: HashMap<isupport::Kind, isupport::Parameter>,
     who_queue: who_queue::WhoQueue,
     resolved_netid: Option<String>,
@@ -258,6 +262,8 @@ impl Client {
                 Instant::now(),
             ),
             registration_required_channels: vec![],
+            pending_joins: HashSet::new(),
+            bouncer_network_listing: None,
             isupport: HashMap::new(),
             who_queue: who_queue::WhoQueue::new(&config),
             resolved_netid: None,
@@ -574,6 +580,52 @@ impl Client {
         }
     }
 
+    // join stays pending till server sends our join back or an error
+    fn track_pending_joins(&mut self, channels: &str) {
+        if self.registration_step != RegistrationStep::Complete {
+            return;
+        }
+
+        for channel in channels.split(',') {
+            if let Ok(channel) = target::Channel::parse(
+                channel,
+                self.chantypes(),
+                self.statusmsg(),
+                self.casemapping(),
+            ) && !self.chanmap.contains_key(&channel)
+            {
+                self.pending_joins.insert(channel);
+            }
+        }
+    }
+
+    fn resolve_failed_join(&mut self, command: &Command) {
+        let (code, args) = match command {
+            Command::Numeric(numeric, args) => (*numeric as u16, args),
+            Command::Unknown(tag, args) => {
+                let Ok(code) = tag.parse::<u16>() else {
+                    return;
+                };
+
+                (code, args)
+            }
+            _ => return,
+        };
+
+        // error replies put channel after our nick
+        if (400..600).contains(&code)
+            && let Some(channel) = args.get(1)
+            && let Ok(channel) = target::Channel::parse(
+                channel,
+                self.chantypes(),
+                self.statusmsg(),
+                self.casemapping(),
+            )
+        {
+            self.pending_joins.remove(&channel);
+        }
+    }
+
     fn start_reroute(&self, command: &Command) -> bool {
         use Command::*;
 
@@ -682,6 +734,10 @@ impl Client {
             self.set_labeled_response_context(buffer, &mut message);
 
         let mut restore_automated_monitored_users: Vec<String> = vec![];
+
+        if let Command::JOIN(channels, _) = &message.command {
+            self.track_pending_joins(channels);
+        }
 
         if matches!(priority, TokenPriority::User) {
             match &message.command {
@@ -1183,6 +1239,12 @@ impl Client {
             };
         }
 
+        let mut left_channel = None;
+
+        if !self.pending_joins.is_empty() {
+            self.resolve_failed_join(&message.command);
+        }
+
         match &message.command {
             Command::BATCH(batch, params) => {
                 let mut chars = batch.chars();
@@ -1244,6 +1306,7 @@ impl Client {
                         }
                         Some(BatchKind::ChathistoryTargets)
                         | Some(BatchKind::LabeledResponse)
+                        | Some(BatchKind::BouncerNetworks)
                         | None => self.handle(
                             message,
                             context,
@@ -1328,6 +1391,9 @@ impl Client {
                 }
             }
             Command::BOUNCER(subcommand, params) if subcommand == "NETWORK" => {
+                // listing is incomplete if a network gets skipped, only put it back after this one
+                let listing = self.bouncer_network_listing.take();
+
                 // Only the bouncer control connection discovers networks.
                 if self.connection_role() != ConnectionRole::BouncerControl {
                     return Ok(vec![]);
@@ -1352,18 +1418,22 @@ impl Client {
                 }
 
                 let network = BouncerNetwork::parse(netid, network)?;
-                let Some(network_config) =
-                    self.config.bouncer_network_config(&network)
-                else {
+                let network_config =
+                    self.config.bouncer_network_config(&network);
+                let server = Server {
+                    network: Some(network.into()),
+                    ..self.server.clone()
+                };
+
+                self.bouncer_network_listing = listing.map(|mut listed| {
+                    listed.push(server.clone());
+                    listed
+                });
+
+                let Some(network_config) = network_config else {
                     return Ok(vec![]);
                 };
-                return Ok(vec![Event::BouncerNetwork(
-                    Server {
-                        network: Some(network.into()),
-                        ..self.server.clone()
-                    },
-                    network_config,
-                )]);
+                return Ok(vec![Event::BouncerNetwork(server, network_config)]);
             }
             Command::CAP(_, sub, a, b) if sub == "LS" => {
                 let (caps, asterisk) = match (a, b) {
@@ -1936,9 +2006,12 @@ impl Client {
                         self.casemapping(),
                     ));
 
-                    self.chanmap.shift_remove(&target_channel);
+                    let parted =
+                        self.chanmap.shift_remove(&target_channel).is_some();
 
                     self.who_queue.parted_channel(&target_channel);
+
+                    left_channel = parted.then_some(target_channel);
                 } else if let Some(channel) =
                     self.chanmap.get_mut(&context!(target::Channel::parse(
                         channel,
@@ -1963,6 +2036,8 @@ impl Client {
                 ));
 
                 if user.nickname() == self.nickname() {
+                    self.pending_joins.remove(&target_channel);
+
                     let casemapping = self.casemapping();
                     let chantypes = self.chantypes().to_vec();
                     let _ = self.chanmap.insert_sorted_by(
@@ -2066,14 +2141,15 @@ impl Client {
                     if casemapping.normalize(victim)
                         == self.nickname().as_normalized_str()
                     {
-                        self.chanmap.shift_remove(&channel);
+                        let kicked =
+                            self.chanmap.shift_remove(&channel).is_some();
 
                         let kicker = ok!(message.user(casemapping));
 
-                        return Ok(vec![Event::Broadcast(
+                        let mut events = vec![Event::Broadcast(
                             broadcast::BroadcastWithContext {
                                 in_channels: broadcast::Channels::Vec(vec![
-                                    channel,
+                                    channel.clone(),
                                 ]),
                                 in_server: true,
                                 in_queries: broadcast::Queries::None,
@@ -2084,7 +2160,13 @@ impl Client {
                                 },
                                 time: message.time(),
                             },
-                        )]);
+                        )];
+
+                        if kicked {
+                            events.push(Event::LeftChannel(channel));
+                        }
+
+                        return Ok(events);
                     } else if let Some(channel) = self.chanmap.get_mut(&channel)
                     {
                         channel.users.remove(&User::from(Nick::from_str(
@@ -3616,6 +3698,7 @@ impl Client {
             })
             .into_iter()
             .map(Event::Message)
+            .chain(left_channel.map(Event::LeftChannel))
             .collect())
     }
 
@@ -3678,6 +3761,11 @@ impl Client {
                 ))
             }),
             Some("labeled-response") => Some(BatchKind::LabeledResponse),
+            Some("soju.im/bouncer-networks") => {
+                self.bouncer_network_listing = Some(vec![]);
+
+                Some(BatchKind::BouncerNetworks)
+            }
             _ => None,
         };
 
@@ -3765,6 +3853,12 @@ impl Client {
                 )?);
             }
 
+            if let Some(BatchKind::BouncerNetworks) = &finished.kind
+                && let Some(listed) = self.bouncer_network_listing.take()
+            {
+                finished.events.push(Event::BouncerNetworksListed(listed));
+            }
+
             if let Some(parent) =
                 batch_tag.and_then(|batch| self.batches.get_mut(batch))
             {
@@ -3828,6 +3922,7 @@ impl Client {
                     Some(BatchKind::Multiline(_, _, _, _, _))
                     | Some(BatchKind::ZncPlayback(_))
                     | Some(BatchKind::LabeledResponse)
+                    | Some(BatchKind::BouncerNetworks)
                     | None => (),
                 };
 
@@ -4673,24 +4768,39 @@ impl Client {
         self.chanmap.keys()
     }
 
-    pub fn channels_with_muted(
-        &self,
-    ) -> impl Iterator<Item = (&target::Channel, bool)> {
+    pub fn sidebar_channels<'a>(
+        &'a self,
+        disconnected: impl Iterator<Item = &'a target::Channel>,
+    ) -> impl Iterator<Item = &'a target::Channel> {
         let casemapping = self.casemapping();
+        let chantypes = self.chantypes();
 
-        self.chanmap.keys().map(move |channel| {
-            (
-                channel,
-                self.config
-                    .channels
-                    .iter()
-                    .find(|config_channel| {
-                        casemapping.normalize(&config_channel.name)
-                            == channel.as_normalized_str()
-                    })
-                    .is_some_and(|config_channel| config_channel.mute),
+        let compare = move |a: &&target::Channel, b: &&target::Channel| {
+            compare_channels(
+                &self.config,
+                chantypes,
+                casemapping,
+                a.as_normalized_str(),
+                b.as_normalized_str(),
             )
-        })
+        };
+
+        let disconnected = disconnected.sorted_by(compare);
+
+        self.chanmap
+            .keys()
+            .merge_by(disconnected, move |a, b| compare(a, b).is_le())
+    }
+
+    pub fn is_joined(&self, channel: &target::Channel) -> bool {
+        self.chanmap.contains_key(channel)
+    }
+
+    pub fn is_join_pending(&self, channel: &target::Channel) -> bool {
+        // autojoins go out once registration completes
+        self.pending_joins.contains(channel)
+            || self.registration_required_channels.contains(channel)
+            || self.registration_step != RegistrationStep::Complete
     }
 
     fn channel_users_received(&mut self, target_channel: target::Channel) {
@@ -4802,30 +4912,6 @@ impl Client {
             .map(|(stored_query, query_state)| {
                 query_state.query.as_ref().unwrap_or(stored_query)
             })
-    }
-
-    pub fn resolve_query_with_muted<'a>(
-        &'a self,
-        query: &target::Query,
-        show_muted_buffers: bool,
-    ) -> (Option<&'a target::Query>, bool) {
-        (
-            self.resolve_query(query),
-            if show_muted_buffers {
-                false
-            } else {
-                let casemapping = self.casemapping();
-
-                self.config
-                    .queries
-                    .iter()
-                    .find(|config_query| {
-                        casemapping.normalize(&config_query.name)
-                            == query.as_normalized_str()
-                    })
-                    .is_some_and(|config_query| config_query.mute)
-            },
-        )
     }
 
     fn record_query(&mut self, query: &target::Query) {
@@ -5193,6 +5279,22 @@ impl Client {
     }
 }
 
+// same sort as `Client::sidebar_channels` for servers w/o a connection (no isupport)
+pub fn offline_sidebar_channels<'a>(
+    config: &config::server::Server,
+    channels: impl Iterator<Item = &'a target::Channel>,
+) -> impl Iterator<Item = &'a target::Channel> {
+    channels.sorted_by(|a, b| {
+        compare_channels(
+            config,
+            isupport::DEFAULT_CHANTYPES,
+            isupport::CaseMap::default(),
+            a.as_normalized_str(),
+            b.as_normalized_str(),
+        )
+    })
+}
+
 fn compare_channels_default(chantypes: &[char], a: &str, b: &str) -> Ordering {
     let (Some(a_chantype), Some(b_chantype)) =
         (a.chars().next(), b.chars().next())
@@ -5361,6 +5463,7 @@ pub enum BatchKind {
     ),
     ZncPlayback(Target),
     LabeledResponse,
+    BouncerNetworks,
 }
 
 impl BatchKind {
@@ -5369,7 +5472,9 @@ impl BatchKind {
             Self::ChathistoryTarget(batch_target)
             | Self::Multiline(_, _, batch_target, _, _)
             | Self::ZncPlayback(batch_target) => Some(batch_target.clone()),
-            Self::ChathistoryTargets | Self::LabeledResponse => None,
+            Self::ChathistoryTargets
+            | Self::LabeledResponse
+            | Self::BouncerNetworks => None,
         }
     }
 }

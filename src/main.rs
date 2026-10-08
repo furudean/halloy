@@ -880,11 +880,20 @@ impl Halloy {
                     sent_time,
                     autoconnect,
                 } => {
-                    self.clients.disconnected(server.clone(), autoconnect);
-
                     let Screen::Dashboard(dashboard) = &mut self.screen else {
+                        self.clients.disconnected(server.clone(), autoconnect);
+
                         return Task::none();
                     };
+
+                    self.storage
+                        .sidebar_buffers_mut()
+                        .mark_server_channels_disconnected(
+                            &server,
+                            &self.clients,
+                        );
+
+                    self.clients.disconnected(server.clone(), autoconnect);
 
                     dashboard.process_server_inputs_completion_and_notice(
                         &server,
@@ -1113,6 +1122,7 @@ impl Halloy {
                             event,
                             &self.servers,
                             &mut self.clients,
+                            self.storage.sidebar_buffers(),
                             &self.version,
                             &self.config,
                             &mut self.theme,
@@ -1129,13 +1139,19 @@ impl Halloy {
 
                 self.storage.tick(now, &self.config);
 
-                let dashboard_tasks = if let Screen::Dashboard(dashboard) =
-                    &mut self.screen
-                {
-                    dashboard.tick(now, &self.clients).map(Message::Dashboard)
-                } else {
-                    Task::none()
-                };
+                let dashboard_tasks =
+                    if let Screen::Dashboard(dashboard) = &mut self.screen {
+                        dashboard
+                            .tick(
+                                now,
+                                &self.clients,
+                                &mut self.storage,
+                                &self.config,
+                            )
+                            .map(Message::Dashboard)
+                    } else {
+                        Task::none()
+                    };
 
                 Task::batch(vec![dashboard_tasks])
             }
@@ -1677,6 +1693,7 @@ impl Halloy {
                         &self.clients,
                         &self.version,
                         FilterChain::borrow(self.storage.get_filters()),
+                        self.storage.sidebar_buffers(),
                         &self.config,
                         &self.theme,
                     )
@@ -1729,6 +1746,7 @@ impl Halloy {
                         &self.clients,
                         &self.version,
                         FilterChain::borrow(self.storage.get_filters()),
+                        self.storage.sidebar_buffers(),
                         &self.config,
                         &self.theme,
                     )
@@ -2038,6 +2056,10 @@ impl Halloy {
                     self.servers.remove(&bouncer_network);
 
                     self.clients.remove(&bouncer_network);
+
+                    self.storage
+                        .sidebar_buffers_mut()
+                        .forget_server(&bouncer_network);
                 }
 
                 self.controllers.end(
@@ -2048,6 +2070,8 @@ impl Halloy {
                 self.servers.remove(&server);
 
                 self.clients.remove(&server);
+
+                self.storage.sidebar_buffers_mut().forget_server(&server);
 
                 Task::none()
             }
@@ -2076,7 +2100,11 @@ impl Halloy {
         let mut exit_tasks = vec![self.save_main_window_settings()];
 
         if let Screen::Dashboard(dashboard) = &mut self.screen {
-            exit_tasks.push(dashboard.exit().map(Message::Dashboard));
+            exit_tasks.push(
+                dashboard
+                    .exit(&self.clients, &mut self.storage, &self.config)
+                    .map(Message::Dashboard),
+            );
         }
 
         let servers_pending_exit = self.controllers.connected();
@@ -2150,6 +2178,11 @@ fn handle_client_events(
                     read_marker,
                 ));
             }
+            Event::LeftChannel(channel) => {
+                storage
+                    .sidebar_buffers_mut()
+                    .mark_channel_disconnected(server.clone(), channel);
+            }
             Event::MonitoredOnline(users) => {
                 let kind = history::Kind::Server(server.clone());
                 let message_window = dashboard.find_window_with_history(&kind);
@@ -2212,7 +2245,18 @@ fn handle_client_events(
                         .map(Message::Dashboard),
                 );
             }
+            Event::BouncerNetworksListed(listed) => {
+                storage
+                    .sidebar_buffers_mut()
+                    .forget_unlisted_bouncer_networks(server, &listed);
+            }
             Event::ShowInSidebar(target) => {
+                if let Target::Channel(channel) = &target {
+                    storage
+                        .sidebar_buffers_mut()
+                        .mark_channel_joined(server, channel);
+                }
+
                 let kind = history::Kind::from_target(server.clone(), target);
 
                 storage_updates

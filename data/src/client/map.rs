@@ -354,8 +354,15 @@ impl Map {
         server: &Server,
         chan: &target::Channel,
     ) -> bool {
-        self.client(server)
-            .is_some_and(|c| c.chanmap.contains_key(chan))
+        self.client(server).is_some_and(|c| c.is_joined(chan))
+    }
+
+    pub fn is_channel_join_pending(
+        &self,
+        server: &Server,
+        chan: &target::Channel,
+    ) -> bool {
+        self.client(server).is_some_and(|c| c.is_join_pending(chan))
     }
 
     pub fn contains_query(

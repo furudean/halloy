@@ -12,6 +12,9 @@ Added:
 - Highlight matches can be optionally named via the `name` property
 - Search buffer to search messages across all servers, channels and queries, opened from the command bar, sidebar menu, a nickname's context menu, the `search` key binding or `/search`
 - Setting `runtime.smooth_scrolling` to control whether smooth scrolling is used
+- Added `sidebar.remember_buffers`. When enabled, buffers that were in the
+  sidebar during the last session will be restored in a disconnected state.
+- Disconnected channels are styled differently than connected channels
 
 Fixed:
 
@@ -31,10 +34,12 @@ Changed:
 - Saved chat history is no longer limited to 10,000 messages per buffer
 - Use OS provided certificate verification service on Windows & macOS
 - Your own join/part is shown in the channel buffer.
+- Being kicked from a channel no longer closes the buffer.
+- Disconnecting from a server no longer removes its channels and queries from the sidebar.
 
 Thanks:
 
-- Contributions: @httpsterio, @oooo-ps
+- Contributions: @httpsterio, @oooo-ps, @furudean
 - Bug reports: @0xS3raph, @httpsterio, tbo, @marcelo4768, @WinnerWind, @strafe
 - Feature requests: @ainola, @kalebris, @sf302
 

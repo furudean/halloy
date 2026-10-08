@@ -14,6 +14,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use super::filter::{Filter, FilterChain};
 use super::reroute::RerouteRules;
+use super::sidebar_buffers::SidebarBuffers;
 use super::{
     Id, Kind, Metadata, ReadMarker, Request, database, model, search,
     smart_filter_internal_message, smart_filter_message, smart_filter_repeat,
@@ -89,6 +90,8 @@ pub struct Manager {
     monitored: Vec<Kind>,
     failure: Option<String>,
     exiting: bool,
+    sidebar_buffers: SidebarBuffers,
+    sidebar_queries_changed: bool,
 }
 
 impl Manager {
@@ -114,6 +117,8 @@ impl Manager {
                 monitored: vec![],
                 failure: None,
                 exiting: false,
+                sidebar_buffers: SidebarBuffers::default(),
+                sidebar_queries_changed: false,
             },
             Task::stream(UnboundedReceiverStream::new(event_receiver)),
         )
@@ -137,6 +142,8 @@ impl Manager {
             monitored: vec![],
             failure: None,
             exiting: false,
+            sidebar_buffers: SidebarBuffers::default(),
+            sidebar_queries_changed: false,
         }
     }
 
@@ -453,6 +460,10 @@ impl Manager {
                         committed.display_read_marker,
                     );
                     if let Some(show) = committed.show_in_sidebar {
+                        self.sidebar_queries_changed |=
+                            matches!(kind, Kind::Query(..))
+                                && storage.show_in_sidebar != show;
+
                         storage.show_in_sidebar = show;
                     }
                     if matches!(
@@ -556,6 +567,9 @@ impl Manager {
                 .filter_message_of_kind(&message, &kind)
                 || message.is_ours()
             {
+                self.sidebar_queries_changed |=
+                    matches!(kind, Kind::Query(..)) && !storage.show_in_sidebar;
+
                 storage.show_in_sidebar = true;
             }
             storage.read_cache.unrecorded(
@@ -603,6 +617,8 @@ impl Manager {
     }
 
     pub fn show_in_sidebar(&mut self, kind: Kind, show: bool) {
+        self.sidebar_queries_changed |= matches!(kind, Kind::Query(..));
+
         self.get_or_load_mut(kind.clone()).show_in_sidebar = show;
         self.publish(&kind);
     }
@@ -648,6 +664,9 @@ impl Manager {
         hide_in_sidebar: bool,
         config: &Config,
     ) {
+        self.sidebar_queries_changed |=
+            hide_in_sidebar && matches!(kind, Kind::Query(..));
+
         let storage = self.get_or_load_mut(kind.clone());
         storage.read_cache.close_model();
         storage.auto_read = None;
@@ -767,6 +786,7 @@ impl Manager {
 
     pub fn exit(&mut self, buffers: &dyn BuffersContext, config: &Config) {
         self.exiting = true;
+        self.sidebar_buffers.exit();
         let histories = self
             .storage
             .keys()
@@ -792,6 +812,71 @@ impl Manager {
             };
             worker.send(worker::Command::Exit(histories, result));
         });
+    }
+
+    /// true if saved buffers changed
+    pub fn update_saved_buffers(
+        &mut self,
+        clients: &client::Map,
+        remember_buffers: bool,
+    ) -> bool {
+        if std::mem::take(&mut self.sidebar_queries_changed) {
+            self.sidebar_buffers.mark_dirty();
+        }
+
+        self.sidebar_buffers.update_saved(
+            sidebar_queries(&self.storage),
+            clients,
+            remember_buffers,
+        )
+    }
+
+    pub fn saved_buffers(&self) -> Vec<(Server, Target)> {
+        self.sidebar_buffers.to_vec()
+    }
+
+    pub fn sidebar_buffers(&self) -> &SidebarBuffers {
+        &self.sidebar_buffers
+    }
+
+    pub fn sidebar_buffers_mut(&mut self) -> &mut SidebarBuffers {
+        &mut self.sidebar_buffers
+    }
+
+    pub fn restore_saved_buffers(
+        &mut self,
+        buffers: Vec<(Server, Target)>,
+        servers: &server::ConfigMap,
+    ) {
+        for (server, target) in buffers {
+            let Some(config) = servers.get(&server.name) else {
+                continue;
+            };
+
+            if server.network.as_ref().is_some_and(|network| {
+                config.bouncer_network_config(network).is_none()
+            }) {
+                continue;
+            }
+
+            // load metadata so unread state shows in the sidebar
+            match &target {
+                Target::Channel(channel) => {
+                    self.get_or_load_mut(Kind::Channel(
+                        server.clone(),
+                        channel.clone(),
+                    ));
+                }
+                Target::Query(query) => {
+                    self.show_in_sidebar(
+                        Kind::Query(server.clone(), query.clone()),
+                        true,
+                    );
+                }
+            }
+
+            self.sidebar_buffers.restore(server, target);
+        }
     }
 
     pub fn get_filters(&self) -> &[Filter] {
@@ -1040,6 +1125,17 @@ impl Manager {
         }
         self.refresh(&Kind::ChannelMonitor);
     }
+}
+
+fn sidebar_queries(
+    storage: &HashMap<Kind, Storage>,
+) -> impl Iterator<Item = (&Server, &target::Query)> + Clone {
+    storage.iter().filter_map(|(kind, storage)| match kind {
+        Kind::Query(server, query) if storage.show_in_sidebar => {
+            Some((server, query))
+        }
+        _ => None,
+    })
 }
 
 #[derive(Debug)]

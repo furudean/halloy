@@ -14,6 +14,7 @@ use data::config::buffer::{ScrollPosition, UsernameFormat};
 use data::dashboard::{self, BufferAction};
 use data::environment::{RELEASE_WEBSITE, WIKI_WEBSITE};
 use data::history::filter::FilterChain;
+use data::history::sidebar_buffers::SidebarBuffers;
 use data::history::{self, model, storage};
 use data::isupport::{self};
 use data::message::source::Status;
@@ -178,7 +179,21 @@ impl Dashboard {
             dashboard.focus_buffer = None;
         }
 
-        Dashboard::from_data(dashboard, storage, config, main_window)
+        let forget_buffers =
+            !config.sidebar.remember_buffers && !dashboard.buffers.is_empty();
+
+        if forget_buffers {
+            dashboard.buffers.clear();
+        }
+
+        let (mut dashboard, task) =
+            Dashboard::from_data(dashboard, storage, config, main_window);
+
+        if forget_buffers {
+            dashboard.last_changed = Some(Instant::now());
+        }
+
+        (dashboard, task)
     }
 
     pub fn buffers_context(&self) -> &dyn BuffersContext {
@@ -651,6 +666,15 @@ impl Dashboard {
                             (Task::none(), None)
                         }
                     }
+                    sidebar::Event::Join(buffer) => {
+                        if let buffer::Upstream::Channel(server, channel) =
+                            buffer
+                        {
+                            clients.join(&server, slice::from_ref(&channel));
+                        }
+
+                        (Task::none(), None)
+                    }
                     sidebar::Event::Leave(buffer) => {
                         self.leave_buffer(clients, storage, config, buffer)
                     }
@@ -658,7 +682,12 @@ impl Dashboard {
                         self.toggle_command_bar(
                             servers,
                             clients,
-                            &closed_upstream_buffers(self, clients),
+                            &closed_upstream_buffers(
+                                self,
+                                servers,
+                                clients,
+                                storage.sidebar_buffers(),
+                            ),
                             version,
                             config,
                             theme,
@@ -841,7 +870,12 @@ impl Dashboard {
                                 self.toggle_command_bar(
                                     servers,
                                     clients,
-                                    &closed_upstream_buffers(self, clients),
+                                    &closed_upstream_buffers(
+                                        self,
+                                        servers,
+                                        clients,
+                                        storage.sidebar_buffers(),
+                                    ),
                                     version,
                                     config,
                                     theme,
@@ -855,7 +889,12 @@ impl Dashboard {
                             self.toggle_command_bar(
                                 servers,
                                 clients,
-                                &closed_upstream_buffers(self, clients),
+                                &closed_upstream_buffers(
+                                    self,
+                                    servers,
+                                    clients,
+                                    storage.sidebar_buffers(),
+                                ),
                                 version,
                                 config,
                                 theme,
@@ -933,6 +972,7 @@ impl Dashboard {
                             servers,
                             clients,
                             &self.models,
+                            storage.sidebar_buffers(),
                             &self.panes,
                             config,
                             self.buffer_settings.show_muted,
@@ -966,6 +1006,7 @@ impl Dashboard {
                             servers,
                             clients,
                             &self.models,
+                            storage.sidebar_buffers(),
                             &self.panes,
                             config,
                             self.buffer_settings.show_muted,
@@ -1046,7 +1087,12 @@ impl Dashboard {
                             self.toggle_command_bar(
                                 servers,
                                 clients,
-                                &closed_upstream_buffers(self, clients),
+                                &closed_upstream_buffers(
+                                    self,
+                                    servers,
+                                    clients,
+                                    storage.sidebar_buffers(),
+                                ),
                                 version,
                                 config,
                                 theme,
@@ -1236,6 +1282,7 @@ impl Dashboard {
                                 servers,
                                 clients,
                                 &self.models,
+                                storage.sidebar_buffers(),
                                 &self.panes,
                                 config,
                                 self.buffer_settings.show_muted,
@@ -1274,6 +1321,7 @@ impl Dashboard {
                                 servers,
                                 clients,
                                 &self.models,
+                                storage.sidebar_buffers(),
                                 &self.panes,
                                 config,
                                 self.buffer_settings.show_muted,
@@ -1611,6 +1659,7 @@ impl Dashboard {
         clients: &'a client::Map,
         version: &'a Version,
         filter_chain: FilterChain,
+        sidebar_buffers: &'a SidebarBuffers,
         config: &'a Config,
         theme: &'a Theme,
     ) -> Element<'a, Message> {
@@ -1658,7 +1707,13 @@ impl Dashboard {
             let base = Element::new(content)
                 .map(move |message| Message::Pane(window, message));
             let base = self.with_command_bar_overlay(
-                base, window, servers, clients, version, config,
+                base,
+                window,
+                servers,
+                clients,
+                sidebar_buffers,
+                version,
+                config,
             );
 
             return self.with_keyboard_shortcuts(base, config);
@@ -1677,6 +1732,7 @@ impl Dashboard {
         clients: &'a client::Map,
         version: &'a Version,
         filter_chain: FilterChain,
+        sidebar_buffers: &'a SidebarBuffers,
         config: &'a Config,
         theme: &'a Theme,
     ) -> Element<'a, Message> {
@@ -1747,6 +1803,7 @@ impl Dashboard {
                 servers,
                 clients,
                 &self.models,
+                sidebar_buffers,
                 &self.panes,
                 &self.server_icons,
                 config,
@@ -1792,6 +1849,7 @@ impl Dashboard {
             self.main_window(),
             servers,
             clients,
+            sidebar_buffers,
             version,
             config,
         );
@@ -1805,6 +1863,7 @@ impl Dashboard {
         window: window::Id,
         servers: &'a server::Map,
         clients: &'a client::Map,
+        sidebar_buffers: &'a SidebarBuffers,
         version: &'a Version,
         config: &'a Config,
     ) -> Element<'a, Message> {
@@ -1818,7 +1877,12 @@ impl Dashboard {
                         .view(
                             servers,
                             clients,
-                            &all_upstream_buffers(clients, &self.models),
+                            &all_upstream_buffers(
+                                servers,
+                                clients,
+                                &self.models,
+                                sidebar_buffers,
+                            ),
                             self.panes.focus,
                             self.buffer_resize_action(),
                             version,
@@ -2774,6 +2838,7 @@ impl Dashboard {
         event: event::Event,
         servers: &server::Map,
         clients: &mut client::Map,
+        sidebar_buffers: &SidebarBuffers,
         version: &Version,
         config: &Config,
         theme: &mut Theme,
@@ -2817,7 +2882,12 @@ impl Dashboard {
                     self.toggle_command_bar(
                         servers,
                         clients,
-                        &closed_upstream_buffers(self, clients),
+                        &closed_upstream_buffers(
+                            self,
+                            servers,
+                            clients,
+                            sidebar_buffers,
+                        ),
                         version,
                         config,
                         theme,
@@ -3630,7 +3700,9 @@ impl Dashboard {
 
                 let input = data::Input::from_command(buffer, command);
 
-                if let Some(encoded) = input.encoded() {
+                if clients.contains_channel(&server, &channel)
+                    && let Some(encoded) = input.encoded()
+                {
                     clients.send_from_buffer(
                         &input.buffer,
                         encoded,
@@ -3647,6 +3719,10 @@ impl Dashboard {
                 history::Kind::Query(server, query)
             }
         };
+
+        storage
+            .sidebar_buffers_mut()
+            .forget_closed_channel(&kind, clients);
 
         // Close pane
         if let Some((window, pane)) = open {
@@ -4071,15 +4147,26 @@ impl Dashboard {
         &mut self,
         now: Instant,
         clients: &client::Map,
+        storage: &mut storage::Manager,
+        config: &Config,
     ) -> Task<Message> {
         if !self.has_typing_activity(clients) {
             self.typing_animation = None;
         }
 
+        if storage
+            .update_saved_buffers(clients, config.sidebar.remember_buffers)
+        {
+            self.last_changed = Some(now);
+        }
+
         if let Some(last_changed) = self.last_changed
             && now.duration_since(last_changed) >= SAVE_AFTER
         {
-            let dashboard = data::Dashboard::from(&*self);
+            let dashboard = data::Dashboard {
+                buffers: storage.saved_buffers(),
+                ..data::Dashboard::from(&*self)
+            };
 
             self.last_changed = None;
 
@@ -4337,6 +4424,8 @@ impl Dashboard {
 
         let mut tasks = vec![sidebar_task.map(Message::Sidebar)];
 
+        storage.restore_saved_buffers(data.buffers, &config.servers);
+
         for pane in data.popout_panes {
             // Popouts are only a single pane
             let pane_grid::Configuration::Pane(pane) = Panes::configuration(
@@ -4537,9 +4626,23 @@ impl Dashboard {
         }
     }
 
-    pub fn exit(&mut self) -> Task<Message> {
+    pub fn exit(
+        &mut self,
+        clients: &client::Map,
+        storage: &mut storage::Manager,
+        config: &Config,
+    ) -> Task<Message> {
+        if storage
+            .update_saved_buffers(clients, config.sidebar.remember_buffers)
+        {
+            self.last_changed = Some(Instant::now());
+        }
+
         let last_changed = self.last_changed.take();
-        let dashboard = data::Dashboard::from(&*self);
+        let dashboard = data::Dashboard {
+            buffers: storage.saved_buffers(),
+            ..data::Dashboard::from(&*self)
+        };
 
         if last_changed.is_some() {
             Task::perform(dashboard.save(), Message::DashboardSaved)
@@ -4941,6 +5044,7 @@ impl<'a> From<&'a Dashboard> for data::Dashboard {
             } else {
                 data::dashboard::Sidebar::Visible
             },
+            buffers: vec![],
         }
     }
 }
@@ -5194,21 +5298,29 @@ impl Panes {
 }
 
 fn all_upstream_buffers(
+    servers: &server::Map,
     clients: &client::Map,
     models: &model::Manager,
+    sidebar_buffers: &SidebarBuffers,
 ) -> Vec<buffer::Upstream> {
     clients
-        .connected_servers()
-        .flat_map(|server| {
+        .iter()
+        .flat_map(|(server, _)| {
+            let config = servers.get(server);
+            let targets = sidebar_buffers.sidebar_targets(
+                server,
+                clients,
+                models,
+                config.as_deref(),
+            );
+
             std::iter::once(buffer::Upstream::Server(server.clone()))
-                .chain(clients.get_channels(server).map(|channel| {
+                .chain(targets.channels.into_iter().map(|(channel, _)| {
                     buffer::Upstream::Channel(server.clone(), channel.clone())
                 }))
-                .chain(models.visible_server_queries(server).into_iter().map(
-                    |nick| {
-                        buffer::Upstream::Query(server.clone(), nick.clone())
-                    },
-                ))
+                .chain(targets.queries.into_iter().map(|nick| {
+                    buffer::Upstream::Query(server.clone(), nick.clone())
+                }))
         })
         .collect()
 }
@@ -5232,11 +5344,13 @@ fn open_upstream_buffers(dashboard: &Dashboard) -> Vec<buffer::Upstream> {
 
 fn closed_upstream_buffers(
     dashboard: &Dashboard,
+    servers: &server::Map,
     clients: &client::Map,
+    sidebar_buffers: &SidebarBuffers,
 ) -> Vec<buffer::Upstream> {
     let open_buffers = open_upstream_buffers(dashboard);
 
-    all_upstream_buffers(clients, &dashboard.models)
+    all_upstream_buffers(servers, clients, &dashboard.models, sidebar_buffers)
         .into_iter()
         .filter(|buffer| !open_buffers.contains(buffer))
         .collect()
