@@ -14,6 +14,7 @@ pub struct SidebarBuffers {
     buffers: HashMap<Server, Buffers>,
     disconnected: HashMap<Server, HashSet<target::Channel>>,
     closing: HashMap<Server, HashSet<target::Channel>>,
+    removed: HashSet<Server>,
     changed: bool,
     exited: bool,
 }
@@ -41,7 +42,11 @@ impl SidebarBuffers {
         self.disconnected.get(server).into_iter().flatten()
     }
 
-    pub fn left(&mut self, server: Server, channel: target::Channel) {
+    pub fn mark_channel_disconnected(
+        &mut self,
+        server: Server,
+        channel: target::Channel,
+    ) {
         if self
             .closing
             .get(&server)
@@ -53,21 +58,17 @@ impl SidebarBuffers {
         self.disconnected.entry(server).or_default().insert(channel);
     }
 
-    pub fn joined(&mut self, server: &Server, channel: &target::Channel) {
-        if let Some(channels) = self.disconnected.get_mut(server) {
-            channels.remove(channel);
-
-            if channels.is_empty() {
-                self.disconnected.remove(server);
-            }
-        }
+    pub fn mark_channel_joined(
+        &mut self,
+        server: &Server,
+        channel: &target::Channel,
+    ) {
+        self.unmark_disconnected(server, channel);
     }
 
-    pub fn close(&mut self, kind: &history::Kind) {
+    pub fn forget_closed_channel(&mut self, kind: &history::Kind) {
         if let history::Kind::Channel(server, channel) = kind {
-            if let Some(channels) = self.disconnected.get_mut(server) {
-                channels.remove(channel);
-            }
+            self.unmark_disconnected(server, channel);
 
             if let Some(buffers) = self.buffers.get_mut(server) {
                 self.changed |= buffers.channels.remove(channel);
@@ -80,7 +81,7 @@ impl SidebarBuffers {
         }
     }
 
-    pub fn server_disconnected(
+    pub fn mark_server_channels_disconnected(
         &mut self,
         server: &Server,
         clients: &client::Map,
@@ -105,19 +106,53 @@ impl SidebarBuffers {
         }
     }
 
-    pub fn server_removed(&mut self, server: &Server) {
-        if let Some(buffers) = self.buffers.get_mut(server) {
-            self.changed |= !buffers.channels.is_empty();
-
-            buffers.channels.clear();
+    pub fn forget_server(&mut self, server: &Server) {
+        if self.buffers.remove(server).is_some() {
+            self.changed = true;
         }
 
         self.disconnected.remove(server);
         self.closing.remove(server);
+        self.removed.insert(server.clone());
+    }
+
+    pub fn forget_unlisted_bouncer_networks(
+        &mut self,
+        parent: &Server,
+        listed: &[Server],
+    ) {
+        let unlisted = self
+            .buffers
+            .keys()
+            .chain(self.disconnected.keys())
+            .filter(|server| {
+                server.parent().as_ref() == Some(parent)
+                    && !listed.contains(server)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        for server in unlisted {
+            self.forget_server(&server);
+        }
+    }
+
+    fn unmark_disconnected(
+        &mut self,
+        server: &Server,
+        channel: &target::Channel,
+    ) {
+        if let Some(channels) = self.disconnected.get_mut(server) {
+            channels.remove(channel);
+
+            if channels.is_empty() {
+                self.disconnected.remove(server);
+            }
+        }
     }
 
     // Returns true when the saved buffers changed.
-    pub fn update<'a>(
+    pub fn update_saved<'a>(
         &mut self,
         queries: impl Iterator<Item = (&'a Server, &'a target::Query)> + Clone,
         clients: &client::Map,
@@ -142,8 +177,8 @@ impl SidebarBuffers {
         let mut changed = std::mem::take(&mut self.changed);
 
         for server in clients.connected_servers() {
-            let saved =
-                &mut self.buffers.entry(server.clone()).or_default().channels;
+            self.removed.remove(server);
+
             let closing = self.closing.get(server);
 
             // Left channels stay saved, since their buffer stays open.
@@ -153,14 +188,26 @@ impl SidebarBuffers {
                     continue;
                 }
 
-                if !saved.contains(channel) {
-                    saved.insert(channel.clone());
+                if !self
+                    .buffers
+                    .get(server)
+                    .is_some_and(|buffers| buffers.channels.contains(channel))
+                {
+                    self.buffers
+                        .entry(server.clone())
+                        .or_default()
+                        .channels
+                        .insert(channel.clone());
                     changed = true;
                 }
             }
         }
 
         self.prune_closing(clients);
+
+        let removed = &self.removed;
+        let queries =
+            queries.filter(move |(server, _)| !removed.contains(*server));
 
         if !self.queries_unchanged(queries.clone()) {
             for buffers in self.buffers.values_mut() {
@@ -177,6 +224,10 @@ impl SidebarBuffers {
 
             changed = true;
         }
+
+        self.buffers.retain(|_, buffers| {
+            !buffers.channels.is_empty() || !buffers.queries.is_empty()
+        });
 
         changed
     }
@@ -239,6 +290,7 @@ mod tests {
     use irc::proto::{self, Command};
 
     use super::*;
+    use crate::bouncer::BouncerNetwork;
     use crate::{config, isupport, message};
 
     fn server() -> Server {
@@ -305,10 +357,10 @@ mod tests {
         for event in events {
             match event {
                 client::Event::JoinedChannel(channel, _) => {
-                    buffers.joined(&server(), &channel);
+                    buffers.mark_channel_joined(&server(), &channel);
                 }
                 client::Event::LeftChannel(channel) => {
-                    buffers.left(server(), channel);
+                    buffers.mark_channel_disconnected(server(), channel);
                 }
                 _ => {}
             }
@@ -357,23 +409,26 @@ mod tests {
     // Mirrors the app, which marks the server disconnected before dropping
     // its client.
     fn disconnect(clients: &mut client::Map, buffers: &mut SidebarBuffers) {
-        buffers.server_disconnected(&server(), clients);
+        buffers.mark_server_channels_disconnected(&server(), clients);
         clients.disconnected(server(), false);
     }
 
     fn update(buffers: &mut SidebarBuffers, clients: &client::Map) -> bool {
-        buffers.update(std::iter::empty(), clients, true)
+        buffers.update_saved(std::iter::empty(), clients, true)
     }
 
     fn update_disabled(
         buffers: &mut SidebarBuffers,
         clients: &client::Map,
     ) -> bool {
-        buffers.update(std::iter::empty(), clients, false)
+        buffers.update_saved(std::iter::empty(), clients, false)
     }
 
     fn close(buffers: &mut SidebarBuffers, name: &str) {
-        buffers.close(&history::Kind::Channel(server(), channel(name)));
+        buffers.forget_closed_channel(&history::Kind::Channel(
+            server(),
+            channel(name),
+        ));
     }
 
     fn is_saved(buffers: &SidebarBuffers, name: &str) -> bool {
@@ -562,11 +617,81 @@ mod tests {
 
         // Mirrors the app, which drops the client before forgetting it.
         clients.remove(&server());
-        buffers.server_removed(&server());
+        buffers.forget_server(&server());
         assert!(update(&mut buffers, &clients));
         assert!(!is_saved(&buffers, "#halloy"));
         assert!(!is_saved(&buffers, "#rust"));
         assert!(!is_disconnected(&buffers, "#rust"));
+    }
+
+    #[test]
+    fn removed_server_queries_are_forgotten() {
+        let mut clients = clients();
+        let mut buffers = SidebarBuffers::default();
+        let query = target::Query::parse(
+            "alice",
+            isupport::DEFAULT_CHANTYPES,
+            &[],
+            isupport::CaseMap::default(),
+        )
+        .unwrap();
+        let server = server();
+        let queries = [(&server, &query)];
+
+        assert!(buffers.update_saved(queries.into_iter(), &clients, true));
+        assert!(
+            buffers
+                .to_vec()
+                .contains(&(server.clone(), Target::Query(query.clone())))
+        );
+
+        // the query's history outlives server
+        clients.remove(&server);
+        buffers.forget_server(&server);
+        assert!(buffers.update_saved(queries.into_iter(), &clients, true));
+        assert!(buffers.to_vec().is_empty());
+
+        // connecting again saves the query again
+        connect(&mut clients);
+        assert!(buffers.update_saved(queries.into_iter(), &clients, true));
+        assert!(
+            buffers
+                .to_vec()
+                .contains(&(server.clone(), Target::Query(query.clone())))
+        );
+    }
+
+    #[test]
+    fn unlisted_bouncer_networks_are_forgotten() {
+        let mut buffers = SidebarBuffers::default();
+        let network = |id: &str| Server {
+            network: Some(Arc::new(BouncerNetwork {
+                id: id.to_string(),
+                name: id.to_string(),
+            })),
+            ..server()
+        };
+
+        buffers.restore(network("1"), Target::Channel(channel("#halloy")));
+        buffers.restore(network("2"), Target::Channel(channel("#rust")));
+
+        buffers.forget_unlisted_bouncer_networks(&server(), &[network("1")]);
+        assert!(
+            buffers
+                .to_vec()
+                .contains(&(network("1"), Target::Channel(channel("#halloy"))))
+        );
+        assert!(
+            !buffers
+                .to_vec()
+                .contains(&(network("2"), Target::Channel(channel("#rust"))))
+        );
+        assert!(
+            buffers
+                .disconnected_channels(&network("2"))
+                .next()
+                .is_none()
+        );
     }
 
     #[test]

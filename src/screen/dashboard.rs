@@ -189,12 +189,19 @@ impl Dashboard {
             dashboard.focus_buffer = None;
         }
 
-        if !config.sidebar.remember_buffers {
+        let forget_buffers =
+            !config.sidebar.remember_buffers && !dashboard.buffers.is_empty();
+
+        if forget_buffers {
             dashboard.buffers.clear();
         }
 
         let (mut dashboard, task) =
             Dashboard::from_data(dashboard, config, main_window);
+
+        if forget_buffers {
+            dashboard.last_changed = Some(Instant::now());
+        }
 
         let tasks = Task::batch(vec![task, dashboard.track(None, config)]);
 
@@ -4283,29 +4290,43 @@ impl Dashboard {
         self.history.get_unique_queries(server)
     }
 
-    pub fn joined_channel(
+    pub fn mark_channel_joined(
         &mut self,
         server: &Server,
         channel: &target::Channel,
     ) {
-        self.history.joined_channel(server, channel);
+        self.history.mark_channel_joined(server, channel);
     }
 
-    pub fn left_channel(&mut self, server: Server, channel: target::Channel) {
-        self.history.left_channel(server, channel);
+    pub fn mark_channel_disconnected(
+        &mut self,
+        server: Server,
+        channel: target::Channel,
+    ) {
+        self.history.mark_channel_disconnected(server, channel);
     }
 
     // Must be called before the server's client is dropped.
-    pub fn server_disconnected(
+    pub fn mark_server_channels_disconnected(
         &mut self,
         server: &Server,
         clients: &data::client::Map,
     ) {
-        self.history.server_disconnected(server, clients);
+        self.history
+            .mark_server_channels_disconnected(server, clients);
     }
 
-    pub fn server_removed(&mut self, server: &Server) {
-        self.history.server_removed(server);
+    pub fn forget_server(&mut self, server: &Server) {
+        self.history.forget_server(server);
+    }
+
+    pub fn forget_unlisted_bouncer_networks(
+        &mut self,
+        parent: &Server,
+        listed: &[Server],
+    ) {
+        self.history
+            .forget_unlisted_bouncer_networks(parent, listed);
     }
 
     pub fn add_to_sidebar(&mut self, server: Server, query: target::Query) {

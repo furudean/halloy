@@ -437,7 +437,7 @@ impl Manager {
         clients: &client::Map,
         server_messages_config: &config::buffer::ServerMessages,
     ) -> Option<impl Future<Output = Message> + use<>> {
-        self.sidebar_buffers.close(&kind);
+        self.sidebar_buffers.forget_closed_channel(&kind);
 
         let history = self.data.map.remove(&kind)?;
         let seed = clients.get_seed(&kind);
@@ -938,7 +938,7 @@ impl Manager {
         clients: &client::Map,
         remember_buffers: bool,
     ) -> bool {
-        self.sidebar_buffers.update(
+        self.sidebar_buffers.update_saved(
             sidebar_queries(&self.data.map, &self.filters),
             clients,
             remember_buffers,
@@ -978,28 +978,43 @@ impl Manager {
         }
     }
 
-    pub fn joined_channel(
+    pub fn mark_channel_joined(
         &mut self,
         server: &Server,
         channel: &target::Channel,
     ) {
-        self.sidebar_buffers.joined(server, channel);
+        self.sidebar_buffers.mark_channel_joined(server, channel);
     }
 
-    pub fn left_channel(&mut self, server: Server, channel: target::Channel) {
-        self.sidebar_buffers.left(server, channel);
+    pub fn mark_channel_disconnected(
+        &mut self,
+        server: Server,
+        channel: target::Channel,
+    ) {
+        self.sidebar_buffers
+            .mark_channel_disconnected(server, channel);
     }
 
-    pub fn server_disconnected(
+    pub fn mark_server_channels_disconnected(
         &mut self,
         server: &Server,
         clients: &client::Map,
     ) {
-        self.sidebar_buffers.server_disconnected(server, clients);
+        self.sidebar_buffers
+            .mark_server_channels_disconnected(server, clients);
     }
 
-    pub fn server_removed(&mut self, server: &Server) {
-        self.sidebar_buffers.server_removed(server);
+    pub fn forget_server(&mut self, server: &Server) {
+        self.sidebar_buffers.forget_server(server);
+    }
+
+    pub fn forget_unlisted_bouncer_networks(
+        &mut self,
+        parent: &Server,
+        listed: &[Server],
+    ) {
+        self.sidebar_buffers
+            .forget_unlisted_bouncer_networks(parent, listed);
     }
 
     pub fn restore_saved_buffers(
@@ -1010,7 +1025,13 @@ impl Manager {
         let mut tasks = vec![];
 
         for (server, target) in buffers {
-            if !servers.contains(&server.name) {
+            let Some(config) = servers.get(&server.name) else {
+                continue;
+            };
+
+            if server.network.as_ref().is_some_and(|network| {
+                config.bouncer_network_config(network).is_none()
+            }) {
                 continue;
             }
 

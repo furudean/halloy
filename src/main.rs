@@ -875,7 +875,10 @@ impl Halloy {
                         return Task::none();
                     };
 
-                    dashboard.server_disconnected(&server, &self.clients);
+                    dashboard.mark_server_channels_disconnected(
+                        &server,
+                        &self.clients,
+                    );
 
                     self.clients.disconnected(server.clone(), autoconnect);
 
@@ -1868,7 +1871,7 @@ impl Halloy {
 
                     self.clients.remove(&bouncer_network);
 
-                    dashboard.server_removed(&bouncer_network);
+                    dashboard.forget_server(&bouncer_network);
                 }
 
                 self.controllers.end(
@@ -1880,7 +1883,7 @@ impl Halloy {
 
                 self.clients.remove(&server);
 
-                dashboard.server_removed(&server);
+                dashboard.forget_server(&server);
 
                 Task::none()
             }
@@ -2008,10 +2011,10 @@ fn handle_client_events(
                 );
             }
             Event::LeftChannel(channel) => {
-                dashboard.left_channel(server.clone(), channel);
+                dashboard.mark_channel_disconnected(server.clone(), channel);
             }
             Event::JoinedChannel(channel, server_time) => {
-                dashboard.joined_channel(server, &channel);
+                dashboard.mark_channel_joined(server, &channel);
 
                 commands.push(
                     dashboard
@@ -2153,6 +2156,9 @@ fn handle_client_events(
                         .request_override_server_icons(servers)
                         .map(Message::Dashboard),
                 );
+            }
+            Event::BouncerNetworksListed(listed) => {
+                dashboard.forget_unlisted_bouncer_networks(server, &listed);
             }
             Event::AddToSidebar(query) => {
                 dashboard.add_to_sidebar(server.clone(), query);

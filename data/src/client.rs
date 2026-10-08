@@ -181,6 +181,7 @@ pub enum Event {
     MonitoredOffline(Vec<Nick>),
     OnConnect(on_connect::Stream),
     BouncerNetwork(Server, Arc<config::Server>),
+    BouncerNetworksListed(Vec<Server>),
     AddToSidebar(target::Query),
     AuthenticationFailed(Option<String>),
     UpdateIcon,
@@ -1111,6 +1112,9 @@ impl Client {
                             Some("labeled-response") => {
                                 Some(BatchKind::LabeledResponse)
                             }
+                            Some("soju.im/bouncer-networks") => {
+                                Some(BatchKind::BouncerNetworks)
+                            }
                             _ => None,
                         };
 
@@ -1158,6 +1162,25 @@ impl Client {
                                     finished.context.clone(),
                                     config,
                                 )?);
+                            }
+
+                            if let Some(BatchKind::BouncerNetworks) =
+                                &finished.kind
+                            {
+                                let listed = finished
+                                    .events
+                                    .iter()
+                                    .filter_map(|event| match event {
+                                        Event::BouncerNetwork(server, _) => {
+                                            Some(server.clone())
+                                        }
+                                        _ => None,
+                                    })
+                                    .collect();
+
+                                finished
+                                    .events
+                                    .push(Event::BouncerNetworksListed(listed));
                             }
 
                             if let Some(parent) = batch_tag
@@ -1253,6 +1276,7 @@ impl Client {
                                     ))
                                     | Some(BatchKind::ZncPlayback(_))
                                     | Some(BatchKind::LabeledResponse)
+                                    | Some(BatchKind::BouncerNetworks)
                                     | None => (),
                                 };
 
@@ -1287,6 +1311,7 @@ impl Client {
                         }
                         Some(BatchKind::ChathistoryTargets)
                         | Some(BatchKind::LabeledResponse)
+                        | Some(BatchKind::BouncerNetworks)
                         | None => self.handle(message, context, config)?,
                         Some(BatchKind::ZncPlayback(batch_target)) => self
                             .handle_znc_playback(message, batch_target.clone()),
@@ -4853,6 +4878,7 @@ fn continue_chathistory_between(
             | Event::MonitoredOffline(_)
             | Event::OnConnect(_)
             | Event::BouncerNetwork(_, _)
+            | Event::BouncerNetworksListed(_)
             | Event::AddToSidebar(_)
             | Event::AuthenticationFailed(_)
             | Event::UpdateIcon => None,
@@ -4903,6 +4929,7 @@ fn continue_chathistory_targets(
             | Event::MonitoredOffline(_)
             | Event::OnConnect(_)
             | Event::BouncerNetwork(_, _)
+            | Event::BouncerNetworksListed(_)
             | Event::AddToSidebar(_)
             | Event::AuthenticationFailed(_)
             | Event::UpdateIcon => None,
@@ -5824,6 +5851,7 @@ pub enum BatchKind {
     ),
     ZncPlayback(Target),
     LabeledResponse,
+    BouncerNetworks,
 }
 
 impl BatchKind {
@@ -5832,7 +5860,9 @@ impl BatchKind {
             Self::ChathistoryTarget(batch_target)
             | Self::Multiline(_, _, batch_target, _, _)
             | Self::ZncPlayback(batch_target) => Some(batch_target.clone()),
-            Self::ChathistoryTargets | Self::LabeledResponse => None,
+            Self::ChathistoryTargets
+            | Self::LabeledResponse
+            | Self::BouncerNetworks => None,
         }
     }
 }
