@@ -91,10 +91,9 @@ impl Pane {
                 let state_text = disconnected.then(|| {
                     container(
                         text("(Disconnected)")
-                            .style(theme::text::secondary)
+                            .style(theme::text::error)
                             .font_maybe(
-                                theme::font_style::secondary(theme)
-                                    .map(font::get),
+                                theme::font_style::error(theme).map(font::get),
                             )
                             .wrapping(Wrapping::None),
                     )
