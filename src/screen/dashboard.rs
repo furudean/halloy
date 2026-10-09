@@ -5533,6 +5533,23 @@ impl Dashboard {
             })
     }
 
+    pub fn open_pane_server_channels(
+        &self,
+        server: &Server,
+    ) -> Vec<&target::Channel> {
+        self.panes
+            .iter()
+            .filter_map(|(_, _, pane)| match pane.buffer.upstream() {
+                Some(buffer::Upstream::Channel(buffer_server, channel))
+                    if buffer_server == server =>
+                {
+                    Some(channel)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     pub fn open_pane_server_queries(
         &self,
         server: &Server,

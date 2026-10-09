@@ -3394,6 +3394,8 @@ impl Client {
                     for message in messages {
                         self.send(None, message, TokenPriority::High);
                     }
+                } else {
+                    self.expect_bouncer_joins(&channels);
                 }
 
                 if !self.config.monitor.is_empty() {
@@ -4322,12 +4324,33 @@ impl Client {
 
     pub fn is_join_pending(&self, channel: &target::Channel) -> bool {
         // bouncers/services can autojoin right after registering, give those joins some grace
+        let bouncer =
+            self.capabilities.acknowledged(Capability::BouncerNetworks);
+
         self.pending_joins
             .get(channel)
             .is_some_and(|sent_at| sent_at.elapsed() < JOIN_TIMEOUT)
             || self.registered_at.is_none_or(|registered_at| {
-                registered_at.elapsed() < self.initial_join_grace
+                !bouncer && registered_at.elapsed() < self.initial_join_grace
             })
+    }
+
+    // bouncer replays its joins after registering, expect each one until it times out
+    pub fn expect_bouncer_joins<'a>(
+        &mut self,
+        channels: impl IntoIterator<Item = &'a target::Channel>,
+    ) {
+        if !self.capabilities.acknowledged(Capability::BouncerNetworks) {
+            return;
+        }
+
+        let now = Instant::now();
+
+        for channel in channels {
+            if !self.chanmap.contains_key(channel) {
+                self.pending_joins.entry(channel.clone()).or_insert(now);
+            }
+        }
     }
 
     fn channel_users_received(&mut self, target_channel: target::Channel) {
@@ -5354,6 +5377,16 @@ impl Map {
         chan: &target::Channel,
     ) -> bool {
         self.client(server).is_some_and(|c| c.is_joined(chan))
+    }
+
+    pub fn expect_bouncer_joins<'a>(
+        &mut self,
+        server: &Server,
+        channels: impl IntoIterator<Item = &'a target::Channel>,
+    ) {
+        if let Some(client) = self.client_mut(server) {
+            client.expect_bouncer_joins(channels);
+        }
     }
 
     pub fn is_channel_join_pending(

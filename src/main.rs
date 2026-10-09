@@ -2132,6 +2132,20 @@ fn handle_client_events(
             }
             Event::OnConnect(on_connect) => {
                 let server = server.clone();
+
+                let mut channels = dashboard
+                    .sidebar_buffers_mut()
+                    .disconnected_channels(&server)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                channels.extend(
+                    dashboard
+                        .open_pane_server_channels(&server)
+                        .into_iter()
+                        .cloned(),
+                );
+                clients.expect_bouncer_joins(&server, &channels);
+
                 for query in dashboard.open_pane_server_queries(&server) {
                     if let Some(client) = clients.client_mut(&server) {
                         let user = User::from(Nick::from(query));
