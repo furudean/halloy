@@ -229,6 +229,7 @@ pub struct Client {
     away: bool,
     registration_step: RegistrationStep,
     registered_at: Option<Instant>,
+    initial_join_grace: Duration,
     capabilities: Capabilities,
     features: Features,
     sasl_succeeded: bool,
@@ -299,6 +300,7 @@ impl Client {
             away: false,
             registration_step: RegistrationStep::Start,
             registered_at: None,
+            initial_join_grace: INITIAL_JOIN_GRACE,
             capabilities: Capabilities::default(),
             features: Features::default(),
             sasl_succeeded: false,
@@ -4316,7 +4318,7 @@ impl Client {
         self.pending_joins.contains(channel)
             || self.registration_required_channels.contains(channel)
             || self.registered_at.is_none_or(|registered_at| {
-                registered_at.elapsed() < INITIAL_JOIN_GRACE
+                registered_at.elapsed() < self.initial_join_grace
             })
     }
 
@@ -6787,7 +6789,8 @@ mod tests {
         let mut client = test_client(nickname);
 
         client.registration_step = RegistrationStep::Complete;
-        client.registered_at = Instant::now().checked_sub(INITIAL_JOIN_GRACE);
+        client.registered_at = Some(Instant::now());
+        client.initial_join_grace = Duration::ZERO;
 
         client
     }
