@@ -211,7 +211,10 @@ pub fn view<'a>(
     let show_join_banner = connected
         && disconnected
         && !clients.is_channel_join_pending(server, channel);
-    let our_nick_user = our_nick.cloned().map(User::from);
+    let our_nick_user = our_nick
+        .filter(|_| our_user.is_none())
+        .cloned()
+        .map(User::from);
 
     let text_input = show_text_input.then(|| {
         input_view::view(
