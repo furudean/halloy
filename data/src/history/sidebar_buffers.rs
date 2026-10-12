@@ -22,9 +22,7 @@ pub struct SidebarBuffers {
     disconnected: HashMap<Server, HashSet<target::Channel>>,
     closing: HashMap<Server, HashSet<target::Channel>>,
     removed: HashSet<Server>,
-    remember_buffers: bool,
     changed: bool,
-    dirty: bool,
     exited: bool,
 }
 
@@ -79,17 +77,11 @@ impl SidebarBuffers {
         }
     }
 
-    pub fn mark_dirty(&mut self) {
-        self.dirty = true;
-    }
-
     pub fn mark_channel_disconnected(
         &mut self,
         server: Server,
         channel: target::Channel,
     ) {
-        self.dirty = true;
-
         if let Some(channels) = self.closing.get_mut(&server)
             && channels.remove(&channel)
         {
@@ -108,7 +100,6 @@ impl SidebarBuffers {
         server: &Server,
         channel: &target::Channel,
     ) {
-        self.dirty = true;
         self.unmark_disconnected(server, channel);
 
         // rejoining cancels an earlier close
@@ -127,7 +118,6 @@ impl SidebarBuffers {
         clients: &client::Map,
     ) {
         if let history::Kind::Channel(server, channel) = kind {
-            self.dirty = true;
             self.unmark_disconnected(server, channel);
 
             if let Some(buffers) = self.buffers.get_mut(server) {
@@ -149,8 +139,6 @@ impl SidebarBuffers {
         server: &Server,
         clients: &client::Map,
     ) {
-        self.dirty = true;
-
         let closing = self.closing.remove(server);
 
         let channels = clients
@@ -172,8 +160,6 @@ impl SidebarBuffers {
     }
 
     pub fn forget_server(&mut self, server: &Server) {
-        self.dirty = true;
-
         if self.buffers.remove(server).is_some() {
             self.changed = true;
         }
@@ -229,11 +215,6 @@ impl SidebarBuffers {
             return false;
         }
 
-        if remember_buffers != self.remember_buffers {
-            self.remember_buffers = remember_buffers;
-            self.dirty = true;
-        }
-
         if !remember_buffers {
             let cleared = self.buffers.values().any(|buffers| {
                 !buffers.channels.is_empty() || !buffers.queries.is_empty()
@@ -241,27 +222,14 @@ impl SidebarBuffers {
 
             self.buffers.clear();
             self.changed = false;
-            self.dirty = false;
 
             return cleared;
         }
 
-        // removed server reconnecting gets its queries saved again
-        if self
-            .removed
-            .iter()
-            .any(|server| clients.client(server).is_some())
-        {
-            self.dirty = true;
-        }
-
         let mut changed = std::mem::take(&mut self.changed);
 
-        if !std::mem::take(&mut self.dirty) {
-            return changed;
-        }
-
         for server in clients.connected_servers() {
+            // removed server reconnecting gets its queries saved again
             self.removed.remove(server);
 
             let closing = self.closing.get(server);

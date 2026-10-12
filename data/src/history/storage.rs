@@ -91,7 +91,6 @@ pub struct Manager {
     failure: Option<String>,
     exiting: bool,
     sidebar_buffers: SidebarBuffers,
-    sidebar_queries_changed: bool,
 }
 
 impl Manager {
@@ -118,7 +117,6 @@ impl Manager {
                 failure: None,
                 exiting: false,
                 sidebar_buffers: SidebarBuffers::default(),
-                sidebar_queries_changed: false,
             },
             Task::stream(UnboundedReceiverStream::new(event_receiver)),
         )
@@ -143,7 +141,6 @@ impl Manager {
             failure: None,
             exiting: false,
             sidebar_buffers: SidebarBuffers::default(),
-            sidebar_queries_changed: false,
         }
     }
 
@@ -460,10 +457,6 @@ impl Manager {
                         committed.display_read_marker,
                     );
                     if let Some(show) = committed.show_in_sidebar {
-                        self.sidebar_queries_changed |=
-                            matches!(kind, Kind::Query(..))
-                                && storage.show_in_sidebar != show;
-
                         storage.show_in_sidebar = show;
                     }
                     if matches!(
@@ -567,9 +560,6 @@ impl Manager {
                 .filter_message_of_kind(&message, &kind)
                 || message.is_ours()
             {
-                self.sidebar_queries_changed |=
-                    matches!(kind, Kind::Query(..)) && !storage.show_in_sidebar;
-
                 storage.show_in_sidebar = true;
             }
             storage.read_cache.unrecorded(
@@ -617,8 +607,6 @@ impl Manager {
     }
 
     pub fn show_in_sidebar(&mut self, kind: Kind, show: bool) {
-        self.sidebar_queries_changed |= matches!(kind, Kind::Query(..));
-
         self.get_or_load_mut(kind.clone()).show_in_sidebar = show;
         self.publish(&kind);
     }
@@ -664,9 +652,6 @@ impl Manager {
         hide_in_sidebar: bool,
         config: &Config,
     ) {
-        self.sidebar_queries_changed |=
-            hide_in_sidebar && matches!(kind, Kind::Query(..));
-
         let storage = self.get_or_load_mut(kind.clone());
         storage.read_cache.close_model();
         storage.auto_read = None;
@@ -820,10 +805,6 @@ impl Manager {
         clients: &client::Map,
         remember_buffers: bool,
     ) -> bool {
-        if std::mem::take(&mut self.sidebar_queries_changed) {
-            self.sidebar_buffers.mark_dirty();
-        }
-
         self.sidebar_buffers.update_saved(
             sidebar_queries(&self.storage),
             clients,
