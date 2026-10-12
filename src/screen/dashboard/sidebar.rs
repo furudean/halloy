@@ -6,7 +6,7 @@ use data::config::server::SidebarVisibility;
 use data::config::sidebar::{InternalBuffer, PrimaryIcon};
 use data::config::{self, Config, sidebar};
 use data::dashboard::{BufferAction, BufferFocusedAction};
-use data::history::sidebar_buffers::{ChannelState, SidebarBuffers};
+use data::history::sidebar_buffers::SidebarBuffers;
 use data::history::{self, model};
 use data::{
     Image, Version, buffer, file_transfer, isupport, server, server_icon,
@@ -216,12 +216,14 @@ impl Sidebar {
             |buffer: buffer::Upstream,
              kind: history::Kind,
              muted: bool,
+             channel_state: Option<client::ChannelState>,
              casemapping: isupport::CaseMap|
              -> Option<UpstreamBufferSidebarData> {
                 UpstreamBufferSidebarData::from_upstream_buffer(
                     buffer,
                     kind,
                     muted,
+                    channel_state,
                     casemapping,
                     show_muted_buffers,
                     models,
@@ -251,6 +253,7 @@ impl Sidebar {
                 buffer::Upstream::Server(server.clone()),
                 history::Kind::Server(server.clone()),
                 false,
+                None,
                 casemapping,
             )?;
 
@@ -268,18 +271,15 @@ impl Sidebar {
             let mut collapsible_buffers = vec![];
 
             for (channel, channel_state) in targets.channels {
-                if let Some(mut buffer_data) = upstream_buffer_data(
+                if let Some(buffer_data) = upstream_buffer_data(
                     buffer::Upstream::Channel(server.clone(), channel.clone()),
                     history::Kind::Channel(server.clone(), channel.clone()),
                     mute_config.is_some_and(|config| {
                         config.channel_muted(channel, casemapping)
                     }),
+                    Some(channel_state),
                     casemapping,
                 ) {
-                    buffer_data.disconnected =
-                        channel_state != ChannelState::Joined;
-                    buffer_data.join_pending =
-                        channel_state == ChannelState::Joining;
                     collapsible_buffers.push(buffer_data);
                 }
             }
@@ -296,6 +296,7 @@ impl Sidebar {
                     buffer::Upstream::Query(server.clone(), query.clone()),
                     history::Kind::Query(server.clone(), query.clone()),
                     muted,
+                    None,
                     casemapping,
                 ) {
                     collapsible_buffers.push(buffer_data);
@@ -891,8 +892,7 @@ impl Sidebar {
                                 buffer: buffer_data.buffer,
                                 kind: buffer_data.kind,
                                 indicators: buffer_data.indicators,
-                                disconnected: buffer_data.disconnected,
-                                join_pending: buffer_data.join_pending,
+                                channel_state: buffer_data.channel_state,
                                 connection_status,
                                 server_has_collapsible_buffers:
                                     has_collapsible_buffers,
@@ -1071,8 +1071,7 @@ struct UpstreamBufferSidebarData {
     #[expect(dead_code)] // TODO: Cycle highlights
     has_highlight: bool,
     indicators: IndicatorState,
-    disconnected: bool,
-    join_pending: bool,
+    channel_state: Option<client::ChannelState>,
 }
 
 impl UpstreamBufferSidebarData {
@@ -1080,6 +1079,7 @@ impl UpstreamBufferSidebarData {
         buffer: buffer::Upstream,
         kind: history::Kind,
         muted: bool,
+        channel_state: Option<client::ChannelState>,
         casemapping: isupport::CaseMap,
         show_muted_buffers: bool,
         models: &model::Manager,
@@ -1136,8 +1136,7 @@ impl UpstreamBufferSidebarData {
             has_unread,
             has_highlight,
             indicators,
-            disconnected: false,
-            join_pending: false,
+            channel_state,
         })
     }
 
@@ -1323,8 +1322,7 @@ impl Entry {
         connection_status: Option<ConnectionStatus>,
         supports_detach: bool,
         has_history: bool,
-        disconnected: bool,
-        join_pending: bool,
+        channel_state: Option<client::ChannelState>,
     ) -> Vec<Self> {
         use Entry::*;
 
@@ -1377,16 +1375,12 @@ impl Entry {
         });
 
         if connected {
-            if disconnected {
-                if !join_pending {
-                    entries.push(Join);
+            match channel_state {
+                Some(client::ChannelState::Parted) => entries.push(Join),
+                Some(client::ChannelState::Joined) if supports_detach => {
+                    entries.push(Detach);
                 }
-            } else if matches!(
-                buffer,
-                buffer::Buffer::Upstream(buffer::Upstream::Channel(_, _))
-            ) && supports_detach
-            {
-                entries.push(Detach);
+                _ => {}
             }
             entries.push(Leave);
         } else if connection_status.is_some()
@@ -1433,8 +1427,7 @@ struct UpstreamButtonContext<'a> {
     buffer: buffer::Upstream,
     kind: history::Kind,
     indicators: IndicatorState,
-    disconnected: bool,
-    join_pending: bool,
+    channel_state: Option<client::ChannelState>,
     connection_status: ConnectionStatus,
     server_has_collapsible_buffers: bool,
     server_has_unread: bool,
@@ -1558,7 +1551,7 @@ fn upstream_buffer_button<'a>(
         buffer,
         kind,
         indicators,
-        disconnected,
+        channel_state,
         connection_status,
         server_has_collapsible_buffers,
         casemapping,
@@ -1611,7 +1604,9 @@ fn upstream_buffer_button<'a>(
             buffer::Upstream::Server(_) => theme::text::error,
             _ => theme::text::secondary,
         }
-    } else if *disconnected {
+    } else if channel_state.is_some_and(|channel_state| {
+        channel_state != client::ChannelState::Joined
+    }) {
         theme::text::secondary
     } else {
         theme::text::primary
@@ -1842,8 +1837,7 @@ fn upstream_buffer_context_menu<'a>(
         config,
         panes,
         buffer,
-        disconnected,
-        join_pending,
+        channel_state,
         connection_status,
         server_has_unread,
         supports_detach,
@@ -1862,8 +1856,7 @@ fn upstream_buffer_context_menu<'a>(
         Some(connection_status),
         supports_detach,
         true,
-        disconnected,
-        join_pending,
+        channel_state,
     );
 
     if entries.is_empty() {
@@ -1948,7 +1941,10 @@ fn upstream_buffer_context_menu<'a>(
                 Entry::Leave => (
                     match &buffer {
                         buffer::Upstream::Server(_) => "Disconnect from server",
-                        buffer::Upstream::Channel(_, _) if disconnected => {
+                        buffer::Upstream::Channel(_, _)
+                            if channel_state
+                                != Some(client::ChannelState::Joined) =>
+                        {
                             "Close channel"
                         }
                         buffer::Upstream::Channel(_, _) => "Leave channel",
@@ -2252,8 +2248,7 @@ fn internal_buffer_button<'a>(
         None,
         false,
         kind.is_some(),
-        false,
-        false,
+        None,
     );
 
     if entries.is_empty() {

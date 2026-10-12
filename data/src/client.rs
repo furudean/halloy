@@ -15,7 +15,7 @@ use indexmap::IndexMap;
 use irc::proto::{self, Command, Tags, command, tags};
 use itertools::{Either, Itertools};
 
-pub use self::map::{ClientsContext, Map, State, Status};
+pub use self::map::{ChannelState, ClientsContext, Map, State, Status};
 pub use self::on_connect::on_connect;
 use crate::bouncer::{self, BouncerNetwork};
 use crate::buffer::BuffersContext;
@@ -4805,7 +4805,17 @@ impl Client {
         self.chanmap.contains_key(channel)
     }
 
-    pub fn is_join_pending(&self, channel: &target::Channel) -> bool {
+    pub fn channel_state(&self, channel: &target::Channel) -> ChannelState {
+        if self.is_joined(channel) {
+            ChannelState::Joined
+        } else if self.is_join_pending(channel) {
+            ChannelState::Joining
+        } else {
+            ChannelState::Parted
+        }
+    }
+
+    fn is_join_pending(&self, channel: &target::Channel) -> bool {
         // autojoins go out once registration completes
         self.pending_joins
             .get(channel)

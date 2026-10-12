@@ -6,27 +6,8 @@ use crate::{Server, client, config, history};
 
 #[derive(Debug, Default)]
 pub struct SidebarTargets<'a> {
-    pub channels: Vec<(&'a target::Channel, ChannelState)>,
+    pub channels: Vec<(&'a target::Channel, client::ChannelState)>,
     pub queries: Vec<&'a target::Query>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChannelState {
-    Joined,
-    Joining,
-    Disconnected,
-}
-
-impl ChannelState {
-    fn new(client: &client::Client, channel: &target::Channel) -> Self {
-        if client.is_joined(channel) {
-            ChannelState::Joined
-        } else if client.is_join_pending(channel) {
-            ChannelState::Joining
-        } else {
-            ChannelState::Disconnected
-        }
-    }
 }
 
 #[derive(Debug, Default)]
@@ -82,11 +63,11 @@ impl SidebarBuffers {
         let channels = match (clients.client(server), config) {
             (Some(client), _) => client
                 .sidebar_channels(disconnected)
-                .map(|channel| (channel, ChannelState::new(client, channel)))
+                .map(|channel| (channel, client.channel_state(channel)))
                 .collect(),
             (None, Some(config)) => {
                 client::offline_sidebar_channels(config, disconnected)
-                    .map(|channel| (channel, ChannelState::Disconnected))
+                    .map(|channel| (channel, client::ChannelState::Offline))
                     .collect()
             }
             (None, None) => return SidebarTargets::default(),

@@ -1,4 +1,4 @@
-use data::client::{self, ClientsContext};
+use data::client::{self, ChannelState, ClientsContext};
 use data::history::filter::FilterChain;
 use data::history::{self, model};
 use data::user::{ChannelUsers, User};
@@ -90,15 +90,12 @@ impl Pane {
 
                 let server = &state.server;
 
-                let state_label = if !clients.status(server).connected() {
-                    Some("(Offline)")
-                } else if !clients.contains_channel(server, &state.target)
-                    && !clients.is_channel_join_pending(server, &state.target)
-                {
-                    Some("(Parted)")
-                } else {
-                    None
-                };
+                let state_label =
+                    match clients.channel_state(server, &state.target) {
+                        ChannelState::Offline => Some("(Offline)"),
+                        ChannelState::Parted => Some("(Parted)"),
+                        ChannelState::Joined | ChannelState::Joining => None,
+                    };
 
                 let state_text = state_label.map(|label| {
                     container(text(label).wrapping(Wrapping::None))
