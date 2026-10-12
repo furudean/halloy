@@ -1868,6 +1868,8 @@ impl Halloy {
                     })
                     .collect::<Vec<_>>();
 
+                let mut removed_bouncer_networks = vec![];
+
                 for (server, config) in updated.servers.iter() {
                     let server = server.clone().into();
 
@@ -1900,6 +1902,7 @@ impl Halloy {
                                 );
                                 self.servers.remove(&bouncer_network);
                                 self.clients.remove(&bouncer_network);
+                                removed_bouncer_networks.push(bouncer_network);
                                 continue;
                             };
 
@@ -1938,9 +1941,9 @@ impl Halloy {
 
                 self.config = updated;
 
-                for (server, _) in removed_servers {
+                for (server, _) in &removed_servers {
                     self.controllers.end(
-                        &server,
+                        server,
                         &self
                             .config
                             .buffer
@@ -1949,6 +1952,16 @@ impl Halloy {
                             .default_reason
                             .clone(),
                     );
+
+                    self.clients.remove(server);
+                }
+
+                for server in removed_servers
+                    .iter()
+                    .map(|(server, _)| server)
+                    .chain(&removed_bouncer_networks)
+                {
+                    self.storage.sidebar_buffers_mut().forget_server(server);
                 }
 
                 self.storage.reload_configuration(
