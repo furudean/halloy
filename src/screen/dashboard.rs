@@ -686,7 +686,7 @@ impl Dashboard {
                                 self,
                                 servers,
                                 clients,
-                                storage.sidebar_buffers(),
+                                storage.get_sidebar_buffers(),
                             ),
                             version,
                             config,
@@ -874,7 +874,7 @@ impl Dashboard {
                                         self,
                                         servers,
                                         clients,
-                                        storage.sidebar_buffers(),
+                                        storage.get_sidebar_buffers(),
                                     ),
                                     version,
                                     config,
@@ -893,7 +893,7 @@ impl Dashboard {
                                     self,
                                     servers,
                                     clients,
-                                    storage.sidebar_buffers(),
+                                    storage.get_sidebar_buffers(),
                                 ),
                                 version,
                                 config,
@@ -972,7 +972,7 @@ impl Dashboard {
                             servers,
                             clients,
                             &self.models,
-                            storage.sidebar_buffers(),
+                            storage.get_sidebar_buffers(),
                             &self.panes,
                             config,
                             self.buffer_settings.show_muted,
@@ -1006,7 +1006,7 @@ impl Dashboard {
                             servers,
                             clients,
                             &self.models,
-                            storage.sidebar_buffers(),
+                            storage.get_sidebar_buffers(),
                             &self.panes,
                             config,
                             self.buffer_settings.show_muted,
@@ -1091,7 +1091,7 @@ impl Dashboard {
                                     self,
                                     servers,
                                     clients,
-                                    storage.sidebar_buffers(),
+                                    storage.get_sidebar_buffers(),
                                 ),
                                 version,
                                 config,
@@ -1282,7 +1282,7 @@ impl Dashboard {
                                 servers,
                                 clients,
                                 &self.models,
-                                storage.sidebar_buffers(),
+                                storage.get_sidebar_buffers(),
                                 &self.panes,
                                 config,
                                 self.buffer_settings.show_muted,
@@ -1321,7 +1321,7 @@ impl Dashboard {
                                 servers,
                                 clients,
                                 &self.models,
-                                storage.sidebar_buffers(),
+                                storage.get_sidebar_buffers(),
                                 &self.panes,
                                 config,
                                 self.buffer_settings.show_muted,
@@ -3721,7 +3721,7 @@ impl Dashboard {
         };
 
         storage
-            .sidebar_buffers_mut()
+            .get_sidebar_buffers_mut()
             .forget_closed_channel(&kind, clients);
 
         // Close pane

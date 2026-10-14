@@ -887,7 +887,7 @@ impl Halloy {
                     };
 
                     self.storage
-                        .sidebar_buffers_mut()
+                        .get_sidebar_buffers_mut()
                         .mark_server_channels_disconnected(
                             &server,
                             &self.clients,
@@ -1122,7 +1122,7 @@ impl Halloy {
                             event,
                             &self.servers,
                             &mut self.clients,
-                            self.storage.sidebar_buffers(),
+                            self.storage.get_sidebar_buffers(),
                             &self.version,
                             &self.config,
                             &mut self.theme,
@@ -1693,7 +1693,7 @@ impl Halloy {
                         &self.clients,
                         &self.version,
                         FilterChain::borrow(self.storage.get_filters()),
-                        self.storage.sidebar_buffers(),
+                        self.storage.get_sidebar_buffers(),
                         &self.config,
                         &self.theme,
                     )
@@ -1746,7 +1746,7 @@ impl Halloy {
                         &self.clients,
                         &self.version,
                         FilterChain::borrow(self.storage.get_filters()),
-                        self.storage.sidebar_buffers(),
+                        self.storage.get_sidebar_buffers(),
                         &self.config,
                         &self.theme,
                     )
@@ -1961,7 +1961,9 @@ impl Halloy {
                     .map(|(server, _)| server)
                     .chain(&removed_bouncer_networks)
                 {
-                    self.storage.sidebar_buffers_mut().forget_server(server);
+                    self.storage
+                        .get_sidebar_buffers_mut()
+                        .forget_server(server);
                 }
 
                 self.storage.reload_configuration(
@@ -2071,7 +2073,7 @@ impl Halloy {
                     self.clients.remove(&bouncer_network);
 
                     self.storage
-                        .sidebar_buffers_mut()
+                        .get_sidebar_buffers_mut()
                         .forget_server(&bouncer_network);
                 }
 
@@ -2084,7 +2086,9 @@ impl Halloy {
 
                 self.clients.remove(&server);
 
-                self.storage.sidebar_buffers_mut().forget_server(&server);
+                self.storage
+                    .get_sidebar_buffers_mut()
+                    .forget_server(&server);
 
                 Task::none()
             }
@@ -2193,7 +2197,7 @@ fn handle_client_events(
             }
             Event::LeftChannel(channel) => {
                 storage
-                    .sidebar_buffers_mut()
+                    .get_sidebar_buffers_mut()
                     .mark_channel_disconnected(server.clone(), channel);
             }
             Event::MonitoredOnline(users) => {
@@ -2260,13 +2264,13 @@ fn handle_client_events(
             }
             Event::BouncerNetworksListed(listed) => {
                 storage
-                    .sidebar_buffers_mut()
+                    .get_sidebar_buffers_mut()
                     .forget_unlisted_bouncer_networks(server, &listed);
             }
             Event::ShowInSidebar(target) => {
                 if let Target::Channel(channel) = &target {
                     storage
-                        .sidebar_buffers_mut()
+                        .get_sidebar_buffers_mut()
                         .mark_channel_joined(server, channel);
                 }
 

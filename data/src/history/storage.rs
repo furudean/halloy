@@ -816,11 +816,11 @@ impl Manager {
         self.sidebar_buffers.to_vec()
     }
 
-    pub fn sidebar_buffers(&self) -> &SidebarBuffers {
+    pub fn get_sidebar_buffers(&self) -> &SidebarBuffers {
         &self.sidebar_buffers
     }
 
-    pub fn sidebar_buffers_mut(&mut self) -> &mut SidebarBuffers {
+    pub fn get_sidebar_buffers_mut(&mut self) -> &mut SidebarBuffers {
         &mut self.sidebar_buffers
     }
 
