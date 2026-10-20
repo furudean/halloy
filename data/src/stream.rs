@@ -112,6 +112,7 @@ pub enum Control {
         available: bool,
         addresses: Arc<HashSet<IpAddr>>,
     },
+    Resumed,
     End(Option<String>),
     UpdateConfiguration(Arc<config::Server>, Option<config::Proxy>),
 }
@@ -348,7 +349,10 @@ async fn _run(
                     Some(Control::End(_)) => {
                         state = State::End;
                     }
-                    Some(Control::AuthenticationFailed { .. }) | None => (),
+                    Some(
+                        Control::AuthenticationFailed { .. } | Control::Resumed,
+                    )
+                    | None => (),
                 }
             }
             State::Connected {
@@ -652,6 +656,11 @@ async fn _run(
                                 *network_probe = true;
                                 ping_time.reset_immediately();
                             }
+                        }
+                        Control::Resumed => {
+                            // timers pause during sleep
+                            *network_probe = true;
+                            ping_time.reset_immediately();
                         }
                         Control::AuthenticationFailed { error } => {
                             let autoconnect = config.autoconnect
@@ -1079,6 +1088,12 @@ impl Map {
                 available,
                 addresses: addresses.clone(),
             });
+        }
+    }
+
+    pub fn resumed(&mut self) {
+        for controller in self.controllers.values_mut() {
+            let _ = controller.try_send(Control::Resumed);
         }
     }
 
