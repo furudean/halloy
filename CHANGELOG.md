@@ -6,6 +6,9 @@ Added:
 - Added `buffer.text_input.upload_long_paste` to automatically use filehost in case pasted text is too long
 - Right-clickable text in the server buffer now offers a context menu
 - Lost connections taking minutes to detect after waking macOS from sleep
+- Added `sidebar.remember_buffers`. When enabled, buffers that were in the
+  sidebar during the last session will be restored in a disconnected state.
+- Disconnected channels are styled differently than connected channels
 
 Fixed:
 
@@ -22,6 +25,8 @@ Fixed:
 Changed:
 
 - Default keybinds for focus movement on macOS changed from `⌥ + <arrow keys>` to `ctrl + <arrow keys>` to avoid conflicting with macOS by-word movement keybinds (`⌥ + ←` and `⌥ + →`)
+- Being kicked from a channel no longer closes the buffer.
+- Disconnecting from a server no longer removes its channels and queries from the sidebar.
 
 Thanks:
 

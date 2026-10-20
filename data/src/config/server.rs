@@ -200,6 +200,13 @@ impl Server {
         }
     }
 
+    pub fn muted(&self, casemapping: isupport::CaseMap) -> Muted {
+        Muted {
+            channels: muted_names(&self.channels, casemapping),
+            queries: muted_names(&self.queries, casemapping),
+        }
+    }
+
     pub fn connection(
         &self,
         proxy: Option<config::Proxy>,
@@ -423,6 +430,38 @@ impl Muteable {
             ..Self::default()
         }
     }
+}
+
+#[derive(Debug, Default)]
+pub struct Muted {
+    channels: HashMap<String, bool>,
+    queries: HashMap<String, bool>,
+}
+
+impl Muted {
+    pub fn channel(&self, channel: &target::Channel) -> bool {
+        self.channels
+            .get(channel.as_normalized_str())
+            .is_some_and(|mute| *mute)
+    }
+
+    pub fn query(&self, query: &target::Query) -> bool {
+        self.queries
+            .get(query.as_normalized_str())
+            .is_some_and(|mute| *mute)
+    }
+}
+
+fn muted_names(
+    muteables: &[Muteable],
+    casemapping: isupport::CaseMap,
+) -> HashMap<String, bool> {
+    // reversed so the first entry for a name wins
+    muteables
+        .iter()
+        .rev()
+        .map(|muteable| (casemapping.normalize(&muteable.name), muteable.mute))
+        .collect()
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Deserialize)]

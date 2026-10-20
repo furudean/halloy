@@ -10,6 +10,7 @@ use tokio::time::Instant;
 
 use super::filter::{Filter, FilterChain};
 use super::reroute::RerouteRules;
+use super::sidebar_buffers::SidebarBuffers;
 use crate::capabilities::LabeledResponseContext;
 use crate::history::{self, History, MessageReferences, ReadMarker, metadata};
 use crate::message::broadcast::{self, Broadcast};
@@ -101,6 +102,12 @@ pub enum Event {
 }
 
 #[derive(Debug, Default)]
+pub struct SidebarTargets<'a> {
+    pub channels: Vec<(&'a target::Channel, client::ChannelState)>,
+    pub queries: Vec<&'a target::Query>,
+}
+
+#[derive(Debug, Default)]
 pub struct Manager {
     resources: HashSet<Resource>,
     channel_monitor: channel_monitor::ChannelMonitor,
@@ -108,6 +115,7 @@ pub struct Manager {
     reroute_rules: RerouteRules,
     data: Data,
     last_draft_changed: Option<tokio::time::Instant>,
+    sidebar_buffers: SidebarBuffers,
 }
 
 impl Manager {
@@ -413,6 +421,8 @@ impl Manager {
         clients: &client::Map,
         server_messages_config: &config::buffer::ServerMessages,
     ) -> Option<impl Future<Output = Message> + use<>> {
+        self.sidebar_buffers.forget_closed_channel(&kind, clients);
+
         let history = self.data.map.remove(&kind)?;
         let seed = clients.get_seed(&kind);
         let server_messages_config = server_messages_config.clone();
@@ -447,6 +457,8 @@ impl Manager {
         clients: &client::Map,
         server_messages_config: config::buffer::ServerMessages,
     ) -> impl Future<Output = Message> + use<> {
+        self.sidebar_buffers.exit();
+
         let data = std::mem::take(&mut self.data);
         let drafts = data.input.clone_drafts();
         let seeded_map = data
@@ -898,26 +910,89 @@ impl Manager {
     }
 
     pub fn get_unique_queries(&self, server: &Server) -> Vec<&target::Query> {
-        self.data
-            .map
-            .iter()
-            .filter_map(|(kind, history)| match kind {
-                #[allow(clippy::bool_comparison)] // easy to miss exclamation
-                history::Kind::Query(s, query) => (s == server
-                    && self.filters.iter().all(|filter| {
-                        filter.match_query(query, server) == false
-                    })
-                    && match history {
-                        History::Full { .. } => true,
-                        History::Partial {
-                            show_in_sidebar, ..
-                        } => *show_in_sidebar,
-                    })
-                .then_some(query),
-                _ => None,
-            })
+        sidebar_queries(&self.data.map, &self.filters)
+            .filter_map(|(s, query)| (s == server).then_some(query))
             .sorted_by(Ord::cmp)
             .collect()
+    }
+
+    /// true if saved buffers changed
+    pub fn update_saved_buffers(
+        &mut self,
+        clients: &client::Map,
+        remember_buffers: bool,
+    ) -> bool {
+        self.sidebar_buffers.update_saved(
+            sidebar_queries(&self.data.map, &self.filters),
+            clients,
+            remember_buffers,
+        )
+    }
+
+    pub fn saved_buffers(&self) -> Vec<(Server, Target)> {
+        self.sidebar_buffers.to_vec()
+    }
+
+    pub fn sidebar_targets<'a>(
+        &'a self,
+        server: &Server,
+        clients: &'a client::Map,
+        config: Option<&config::Server>,
+    ) -> SidebarTargets<'a> {
+        let disconnected = self.sidebar_buffers.disconnected_channels(server);
+
+        let channels = match (clients.client(server), config) {
+            (Some(client), _) => client
+                .sidebar_channels(disconnected)
+                .map(|channel| (channel, client.channel_state(channel)))
+                .collect(),
+            (None, Some(config)) => {
+                client::offline_sidebar_channels(config, disconnected)
+                    .map(|channel| (channel, client::ChannelState::Offline))
+                    .collect()
+            }
+            (None, None) => return SidebarTargets::default(),
+        };
+
+        SidebarTargets {
+            channels,
+            queries: self.get_unique_queries(server),
+        }
+    }
+
+    pub fn get_sidebar_buffers_mut(&mut self) -> &mut SidebarBuffers {
+        &mut self.sidebar_buffers
+    }
+
+    pub fn restore_saved_buffers(
+        &mut self,
+        buffers: Vec<(Server, Target)>,
+        servers: &server::ConfigMap,
+    ) -> Vec<impl Future<Output = Message> + use<>> {
+        let mut tasks = vec![];
+
+        for (server, target) in buffers {
+            let Some(config) = servers.get(&server.name) else {
+                continue;
+            };
+
+            if server.network.as_ref().is_some_and(|network| {
+                config.bouncer_network_config(network).is_none()
+            }) {
+                continue;
+            }
+
+            // load metadata first, it gets skipped once history entry exists
+            tasks.extend(self.load_metadata(server.clone(), target.clone()));
+
+            if let Target::Query(query) = &target {
+                self.open(history::Kind::Query(server.clone(), query.clone()));
+            }
+
+            self.sidebar_buffers.restore(server, target);
+        }
+
+        tasks
     }
 
     pub fn server_kinds(&self, server: Server) -> Vec<history::Kind> {
@@ -1558,6 +1633,21 @@ fn with_limit<'a>(
         }
         None => messages.collect(),
     }
+}
+
+fn sidebar_queries<'a>(
+    map: &'a HashMap<history::Kind, History>,
+    filters: &'a [Filter],
+) -> impl Iterator<Item = (&'a Server, &'a target::Query)> + Clone {
+    map.iter().filter_map(|(kind, history)| match kind {
+        #[allow(clippy::bool_comparison)] // easy to miss exclamation
+        history::Kind::Query(server, query) => (filters
+            .iter()
+            .all(|filter| filter.match_query(query, server) == false)
+            && history.shown_in_sidebar())
+        .then_some((server, query)),
+        _ => None,
+    })
 }
 
 #[derive(Debug, Default)]

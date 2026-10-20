@@ -877,11 +877,20 @@ impl Halloy {
                     sent_time,
                     autoconnect,
                 } => {
-                    self.clients.disconnected(server.clone(), autoconnect);
-
                     let Screen::Dashboard(dashboard) = &mut self.screen else {
+                        self.clients.disconnected(server.clone(), autoconnect);
+
                         return Task::none();
                     };
+
+                    dashboard
+                        .get_sidebar_buffers_mut()
+                        .mark_server_channels_disconnected(
+                            &server,
+                            &self.clients,
+                        );
+
+                    self.clients.disconnected(server.clone(), autoconnect);
 
                     dashboard.process_server_inputs_completion_and_notice(
                         &server,
@@ -1682,6 +1691,8 @@ impl Halloy {
                     })
                     .collect::<Vec<_>>();
 
+                let mut removed_bouncer_networks = vec![];
+
                 for (server, config) in updated.servers.iter() {
                     let server = server.clone().into();
 
@@ -1714,6 +1725,7 @@ impl Halloy {
                                 );
                                 self.servers.remove(&bouncer_network);
                                 self.clients.remove(&bouncer_network);
+                                removed_bouncer_networks.push(bouncer_network);
                                 continue;
                             };
 
@@ -1752,9 +1764,9 @@ impl Halloy {
 
                 self.config = updated;
 
-                for (server, _) in removed_servers {
+                for (server, _) in &removed_servers {
                     self.controllers.end(
-                        &server,
+                        server,
                         &self
                             .config
                             .buffer
@@ -1763,9 +1775,21 @@ impl Halloy {
                             .default_reason
                             .clone(),
                     );
+
+                    self.clients.remove(server);
                 }
 
                 if let Screen::Dashboard(dashboard) = &mut self.screen {
+                    for server in removed_servers
+                        .iter()
+                        .map(|(server, _)| server)
+                        .chain(&removed_bouncer_networks)
+                    {
+                        dashboard
+                            .get_sidebar_buffers_mut()
+                            .forget_server(server);
+                    }
+
                     dashboard.set_reroute_rules(&self.servers, &self.clients);
 
                     dashboard.update_filters(
@@ -1855,7 +1879,7 @@ impl Halloy {
 
     fn remove(&mut self, server: Server) -> Task<Message> {
         match &mut self.screen {
-            Screen::Dashboard(_) => {
+            Screen::Dashboard(dashboard) => {
                 let bouncer_networks: Vec<_> = self
                     .servers
                     .get_bouncer_networks(&server)
@@ -1871,6 +1895,10 @@ impl Halloy {
                     self.servers.remove(&bouncer_network);
 
                     self.clients.remove(&bouncer_network);
+
+                    dashboard
+                        .get_sidebar_buffers_mut()
+                        .forget_server(&bouncer_network);
                 }
 
                 self.controllers.end(
@@ -1881,6 +1909,8 @@ impl Halloy {
                 self.servers.remove(&server);
 
                 self.clients.remove(&server);
+
+                dashboard.get_sidebar_buffers_mut().forget_server(&server);
 
                 Task::none()
             }
@@ -2007,7 +2037,16 @@ fn handle_client_events(
                         .map(Message::Dashboard),
                 );
             }
+            Event::LeftChannel(channel) => {
+                dashboard
+                    .get_sidebar_buffers_mut()
+                    .mark_channel_disconnected(server.clone(), channel);
+            }
             Event::JoinedChannel(channel, server_time) => {
+                dashboard
+                    .get_sidebar_buffers_mut()
+                    .mark_channel_joined(server, &channel);
+
                 commands.push(
                     dashboard
                         .track_channel_monitor_channel(
@@ -2148,6 +2187,11 @@ fn handle_client_events(
                         .request_override_server_icons(servers)
                         .map(Message::Dashboard),
                 );
+            }
+            Event::BouncerNetworksListed(listed) => {
+                dashboard
+                    .get_sidebar_buffers_mut()
+                    .forget_unlisted_bouncer_networks(server, &listed);
             }
             Event::AddToSidebar(query) => {
                 dashboard.add_to_sidebar(server.clone(), query);
@@ -2676,27 +2720,6 @@ fn handle_broadcast(
                 ourself,
                 logged_in,
                 user_channels: channels,
-                casemapping,
-            },
-        ),
-        data::client::Broadcast::Kick {
-            kicker,
-            victim,
-            reason,
-            channel,
-            server_time,
-            received_with_server_time,
-        } => dashboard.broadcast(
-            server,
-            casemapping,
-            config,
-            server_time,
-            received_with_server_time,
-            Broadcast::Kick {
-                kicker,
-                victim,
-                reason,
-                channel,
                 casemapping,
             },
         ),
