@@ -453,6 +453,10 @@ impl Message {
         &self,
         condensation_config: &config::buffer::Condensation,
     ) -> bool {
+        if self.is_echo() {
+            return false;
+        }
+
         if let Source::Server(Some(source)) = &self.source {
             condensation_config.kind(source)
         } else {
