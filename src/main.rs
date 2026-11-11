@@ -2338,6 +2338,12 @@ fn handle_client_events(
                     redaction,
                 ));
             }
+            Event::ChathistoryFill(target, fill) => {
+                storage_updates.push(storage::Update::Fill(
+                    history::Kind::from_target(server.clone(), target),
+                    fill,
+                ));
+            }
             Event::UpdateIcon => {
                 if let Screen::Dashboard(dashboard) = screen {
                     commands.push(

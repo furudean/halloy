@@ -17,6 +17,7 @@ mod database;
 mod legacy;
 
 pub mod filter;
+pub mod gap;
 pub mod metadata;
 pub mod model;
 pub mod reroute;

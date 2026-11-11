@@ -27,6 +27,7 @@ pub(super) enum Command {
     Reference(client::ChathistoryLookup),
     Resend(client::ResendLookup),
     HighlightSource(crate::history::model::Navigation, crate::history::Id),
+    MessageSource(crate::history::model::Navigation, message::Pointer, bool),
     MarkRead(Kind, Option<ReadMarker>, bool),
     MarkReadOnExit(Vec<Kind>),
     Exit(Option<Result<usize, Error>>),
@@ -58,6 +59,9 @@ impl Command {
             )],
             Self::HighlightSource(navigation, _) => {
                 vec![Kind::Highlights, Kind::from(navigation.buffer.clone())]
+            }
+            Self::MessageSource(navigation, ..) => {
+                vec![Kind::from(navigation.buffer.clone())]
             }
             Self::Resend(lookup) => vec![Kind::from(lookup.buffer.clone())],
             Self::MarkReadOnExit(kinds) => kinds.clone(),
@@ -498,6 +502,36 @@ impl State {
                     crate::history::model::Message::GoToMessage(navigation),
                 )]);
             }
+            Command::MessageSource(mut navigation, pointer, fetch) => {
+                if navigation.token.strong_count() == 0 {
+                    return;
+                }
+                let kind = Kind::from(navigation.buffer.clone());
+                let located = database.locate(
+                    &kind,
+                    pointer.id.as_ref(),
+                    pointer.time.utc,
+                );
+                let message = match located {
+                    Ok(None) if fetch => {
+                        let _ = self.events.send(vec![Event::Model(
+                            crate::history::model::Message::MissingMessage(
+                                navigation, pointer,
+                            ),
+                        )]);
+                        return;
+                    }
+                    Ok(message) => message,
+                    Err(error) => {
+                        self.fail(string(error));
+                        None
+                    }
+                };
+                navigation.message = message;
+                let _ = self.events.send(vec![Event::Model(
+                    crate::history::model::Message::GoToMessage(navigation),
+                )]);
+            }
             Command::Resend(lookup) => {
                 let kind = Kind::from(lookup.buffer.clone());
                 let message = match database.message(&kind, lookup.history_id) {
@@ -632,7 +666,8 @@ fn reject(events: &Events, command: Command, error: &str) {
         Command::Reference(lookup) => {
             Event::Client(client::Message::ChathistoryReference(lookup, None))
         }
-        Command::HighlightSource(navigation, _) => Event::Model(
+        Command::HighlightSource(navigation, _)
+        | Command::MessageSource(navigation, ..) => Event::Model(
             crate::history::model::Message::GoToMessage(navigation),
         ),
         Command::Resend(lookup) => {

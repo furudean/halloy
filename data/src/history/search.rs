@@ -1,5 +1,8 @@
 use std::fmt::Write;
 
+use itertools::Itertools;
+use jiff::Timestamp;
+
 use crate::message;
 
 const MIN_TEXT_LENGTH: usize = 2;
@@ -43,8 +46,17 @@ pub enum Buffer {
 pub enum Error {
     #[error("{0}")]
     Database(String),
+    #[error("{0}")]
+    Server(String),
     #[error("search stopped")]
     Stopped,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ServerPage {
+    pub messages: Vec<message::Message>,
+    pub oldest: Option<Timestamp>,
+    pub more: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -105,7 +117,7 @@ impl Query {
             last_was_word = false;
             if let Some(nick) = strip_prefix_ignore_case(&word, "from:") {
                 if !nick.is_empty() {
-                    query.from = Some(nick.to_lowercase());
+                    query.from = Some(nick.to_owned());
                 }
             } else if let Some(target) = strip_prefix_ignore_case(&word, "in:")
             {
@@ -165,6 +177,10 @@ impl Query {
 
     pub fn terms(&self) -> impl Iterator<Item = &str> {
         self.terms.iter().map(Term::as_str)
+    }
+
+    pub fn text(&self) -> Option<String> {
+        (!self.terms.is_empty()).then(|| self.terms().join(" "))
     }
 }
 
@@ -248,7 +264,7 @@ mod tests {
     #[test]
     fn filters() {
         let query = Query::parse("From:Casper in:#Halloy release");
-        assert_eq!(query.from.as_deref(), Some("casper"));
+        assert_eq!(query.from.as_deref(), Some("Casper"));
         assert_eq!(query.within.as_deref(), Some("#Halloy"));
         assert_eq!(
             query.fts().as_deref(),

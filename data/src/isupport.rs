@@ -907,6 +907,8 @@ impl fmt::Display for ModeKind {
 pub enum ChathistorySubcommand {
     Latest(Target, Option<MessageReference>, u16),
     Before(Target, MessageReference, u16),
+    After(Target, MessageReference, u16),
+    Around(Target, MessageReference, u16),
     Between(Target, MessageReference, MessageReference, u16),
     Targets(Timestamp, Timestamp, u16),
 }
@@ -916,6 +918,8 @@ impl ChathistorySubcommand {
         match self {
             ChathistorySubcommand::Latest(target, _, _)
             | ChathistorySubcommand::Before(target, _, _)
+            | ChathistorySubcommand::After(target, _, _)
+            | ChathistorySubcommand::Around(target, _, _)
             | ChathistorySubcommand::Between(target, _, _, _) => Some(target),
             ChathistorySubcommand::Targets(_, _, _) => None,
         }

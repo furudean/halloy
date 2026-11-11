@@ -8,7 +8,7 @@ use data::config::buffer::{
     CondensationIcon, HideConsecutiveEnabled, ScrollPosition,
 };
 use data::dashboard::BufferAction;
-use data::history::{self, model, storage};
+use data::history::{self, gap, model, storage};
 use data::isupport::ChathistoryState;
 use data::message::{self, Limit, Searchable, Temporal};
 use data::preview::{self, Previews};
@@ -69,6 +69,7 @@ pub enum Message {
         visible_message_range: VisibleMessageRange,
         has_more_older_messages: bool,
         has_more_newer_messages: bool,
+        gaps: gap::Edges,
         status: Status,
         scroll: scrollable::Scroll,
     },
@@ -80,6 +81,7 @@ pub enum Message {
     ScrollToMissed(keyed::Key),
     ScrollToTop,
     RequestOlderChathistory,
+    RequestChathistoryGap(gap::Edge),
     EnteringViewport(history::Id, Vec<url::Url>),
     ExitingViewport(history::Id),
     ReplyPreviewHovered(history::Id, history::Id, Vec<url::Url>),
@@ -131,6 +133,7 @@ pub enum Event {
     OpenBuffer(Server, Target, BufferAction),
     GoToMessage(buffer::Upstream, message::MessageLink, BufferAction),
     RequestOlderChathistory,
+    RequestChathistoryGap(gap::Edge),
     PreviewChanged,
     HidePreview(history::Kind, history::Id, message::Time, url::Url),
     MarkAsRead,
@@ -296,6 +299,7 @@ pub fn view<'a>(
         has_more_newer_messages,
         cleared,
         migrating,
+        gaps,
         ..
     }) = models.view(kind_ref, &state.limit, config)
     else {
@@ -308,34 +312,58 @@ pub fn view<'a>(
             .into();
     }
 
-    let top_row = if !cleared
-        && !has_more_older_messages
-        && let Some(chathistory_state) = chathistory_state
-    {
-        let (content, message) = match chathistory_state {
-            ChathistoryState::Exhausted => {
-                ("No Older Chat History Messages Available", None)
-            }
-            ChathistoryState::PendingRequest => ("...", None),
-            ChathistoryState::Ready => (
-                "Request Older Chat History Messages",
-                Some(Message::RequestOlderChathistory),
-            ),
-        };
-
-        let top_row_button = button(text(content).size(divider_font_size))
+    let chathistory_row = |content, message| {
+        let button = button(text(content).size(divider_font_size))
             .padding([3, 5])
             .style(|theme, status| {
                 theme::button::secondary(theme, status, false)
             })
             .on_press_maybe(message);
 
-        Some(
-            row![space::horizontal(), top_row_button, space::horizontal()]
-                .padding(padding::top(4).bottom(6))
-                .width(Length::Fill)
-                .align_y(iced::Alignment::Center),
-        )
+        row![space::horizontal(), button, space::horizontal()]
+            .padding(padding::top(4).bottom(6))
+            .width(Length::Fill)
+            .align_y(iced::Alignment::Center)
+    };
+
+    let top_row = if !cleared
+        && !has_more_older_messages
+        && let Some(chathistory_state) = chathistory_state
+    {
+        let (content, message) = match (chathistory_state, &gaps.older) {
+            (ChathistoryState::PendingRequest, _) => ("...", None),
+            (_, Some(edge)) => (
+                "Request Older Chat History Messages",
+                Some(Message::RequestChathistoryGap(edge.clone())),
+            ),
+            (ChathistoryState::Exhausted, None) => {
+                ("No Older Chat History Messages Available", None)
+            }
+            (ChathistoryState::Ready, None) => (
+                "Request Older Chat History Messages",
+                Some(Message::RequestOlderChathistory),
+            ),
+        };
+
+        Some(chathistory_row(content, message))
+    } else {
+        None
+    };
+
+    let bottom_row = if !cleared
+        && !has_more_newer_messages
+        && let Some(edge) = &gaps.newer
+        && let Some(chathistory_state) = chathistory_state
+    {
+        Some(match chathistory_state {
+            ChathistoryState::PendingRequest => chathistory_row("...", None),
+            ChathistoryState::Exhausted | ChathistoryState::Ready => {
+                chathistory_row(
+                    "Request Newer Chat History Messages",
+                    Some(Message::RequestChathistoryGap(edge.clone())),
+                )
+            }
+        })
     } else {
         None
     };
@@ -905,6 +933,10 @@ pub fn view<'a>(
         content_column = content_column.push(bottom_spacer);
     }
 
+    if let Some(bottom_row) = bottom_row {
+        content_column = content_column.push(bottom_row);
+    }
+
     let content =
         sensor(content_column.push(space::vertical().height(line_spacing)))
             .on_resize(Message::ContentResized);
@@ -928,6 +960,7 @@ pub fn view<'a>(
                 visible_message_range,
                 has_more_older_messages,
                 has_more_newer_messages,
+                gaps: gaps.clone(),
                 status,
                 scroll,
             })
@@ -1023,6 +1056,7 @@ impl State {
                 visible_message_range,
                 has_more_older_messages,
                 has_more_newer_messages,
+                gaps,
                 status: old_status,
                 scroll,
             } => {
@@ -1067,6 +1101,21 @@ impl State {
                     }
                 } else if old_status.is_bottom(relative_offset)
                     && !has_more_newer_messages
+                    && let Some(edge) = gaps.newer
+                {
+                    if infinite_scroll {
+                        event = Some(Event::RequestChathistoryGap(edge));
+                    }
+
+                    self.status = Status::Unlocked;
+
+                    if let Some(end_history_id) =
+                        visible_message_range.end_history_id
+                    {
+                        self.limit = Limit::Around(count, end_history_id);
+                    }
+                } else if old_status.is_bottom(relative_offset)
+                    && !has_more_newer_messages
                 {
                     // Hit bottom, anchor it
 
@@ -1092,6 +1141,21 @@ impl State {
                     {
                         self.status = Status::Unlocked;
 
+                        self.limit = Limit::Around(count, start_history_id);
+                    }
+                } else if old_status.is_top(relative_offset)
+                    && !has_more_older_messages
+                    && let Some(edge) = gaps.older
+                {
+                    if infinite_scroll {
+                        event = Some(Event::RequestChathistoryGap(edge));
+                    }
+
+                    self.status = Status::Unlocked;
+
+                    if let Some(start_history_id) =
+                        visible_message_range.start_history_id
+                    {
                         self.limit = Limit::Around(count, start_history_id);
                     }
                 } else if old_status.is_top(relative_offset)
@@ -1456,6 +1520,21 @@ impl State {
                     return (
                         Task::none(),
                         Some(Event::RequestOlderChathistory),
+                    );
+                }
+            }
+            Message::RequestChathistoryGap(edge) => {
+                if let Some(server) = kind_ref.as_server() {
+                    self.status = Status::Unlocked;
+                    self.limit = Limit::Around(
+                        clients.get_server_chathistory_limit(server) as usize
+                            + step_messages(self.pane_size.height, config),
+                        edge.history_id,
+                    );
+
+                    return (
+                        Task::none(),
+                        Some(Event::RequestChathistoryGap(edge)),
                     );
                 }
             }
@@ -2061,6 +2140,14 @@ impl State {
         {
             (old_messages, new_messages)
         } else {
+            // the pending load may not contain the target, so load a window
+            // centered on it instead.
+            if !matches!(self.limit, Limit::Around(_, id) if id == history_id) {
+                self.limit = Limit::Around(self.limit.count(), history_id);
+
+                storage.set_model_limit(kind_ref.into(), self.limit);
+            }
+
             // We're still loading history, set pending scroll_to to scroll to
             // the target message.
             self.scroll_to = Some(message_scroll_to);

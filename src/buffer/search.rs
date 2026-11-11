@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use data::client::{self, ClientsContext};
@@ -8,13 +9,14 @@ use data::history::{self, search, storage};
 use data::target::{self, Target};
 use data::user::Nick;
 use data::{Config, Server, buffer, message, preview};
+use hashbrown::{HashMap, HashSet};
 use iced::widget::{
     self, button, center, column, container, operation, row, rule, scrollable,
     text, text_input,
 };
 use iced::{ContentFit, Length, Task, padding};
-use jiff::Zoned;
 use jiff::civil::Date;
+use jiff::{Timestamp, Zoned};
 use tokio::time;
 
 use super::{context_menu, message_feed, scroll_view};
@@ -22,12 +24,15 @@ use crate::widget::Element;
 use crate::{Theme, font, icon, theme};
 
 const DEBOUNCE: Duration = Duration::from_millis(200);
+const REMOTE_DEBOUNCE: Duration = Duration::from_millis(800);
 
 #[derive(Debug, Clone)]
 pub enum Message {
     Input(String),
     Debounced(u64),
+    RemoteDebounced(u64),
     Results(u64, search::Range, Result<search::Page, search::Error>),
+    RemoteResults(u64, Server, Result<search::ServerPage, search::Error>),
     LoadMore,
     Scrolled(bool),
     Feed(scroll_view::Message),
@@ -58,6 +63,29 @@ struct Hit {
     message: data::Message,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemoteStatus {
+    Loading,
+    More,
+    Done,
+}
+
+#[derive(Debug, Clone)]
+struct Remote {
+    server: Server,
+    status: RemoteStatus,
+    hits: Vec<Arc<Hit>>,
+    before: Option<Timestamp>,
+}
+
+impl Remote {
+    fn frontier(&self) -> Option<Timestamp> {
+        (self.status != RemoteStatus::Done)
+            .then_some(self.before)
+            .flatten()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Search {
     pub query: String,
@@ -65,7 +93,9 @@ pub struct Search {
     scrollable_id: widget::Id,
     generation: u64,
     status: Status,
-    hits: Vec<Hit>,
+    hits: Vec<Arc<Hit>>,
+    local: Vec<Arc<Hit>>,
+    remotes: Vec<Remote>,
     newest: Option<search::Cursor>,
     next: Option<search::Cursor>,
     behind: bool,
@@ -81,6 +111,8 @@ impl Search {
             generation: 0,
             status: Status::Idle,
             hits: vec![],
+            local: vec![],
+            remotes: vec![],
             newest: None,
             next: None,
             behind: false,
@@ -92,12 +124,14 @@ impl Search {
 
     pub fn set_query(&mut self, query: String) {
         self.hits.clear();
+        self.local.clear();
         self.change_query(query);
     }
 
     fn change_query(&mut self, query: String) {
         self.query = query;
         self.generation += 1;
+        self.remotes.clear();
         self.newest = None;
         self.next = None;
         self.behind = false;
@@ -105,12 +139,86 @@ impl Search {
             Status::Stale
         } else {
             self.hits.clear();
+            self.local.clear();
             Status::Idle
         };
     }
 
     pub fn has_more(&self) -> bool {
-        self.next.is_some()
+        self.cutoff().is_some()
+    }
+
+    fn local_frontier(&self) -> Option<Timestamp> {
+        self.next
+            .and(self.local.last())
+            .map(|hit| hit.message.time.utc)
+    }
+
+    fn cutoff(&self) -> Option<Timestamp> {
+        self.remotes
+            .iter()
+            .filter_map(Remote::frontier)
+            .chain(self.local_frontier())
+            .max()
+    }
+
+    fn merge(&mut self) {
+        let mut hits = self.local.clone();
+
+        if self.remotes.iter().any(|remote| !remote.hits.is_empty()) {
+            let msgids = self
+                .local
+                .iter()
+                .filter_map(|hit| {
+                    hit.message
+                        .id
+                        .as_ref()
+                        .map(|id| (hit.buffer.as_server(), id))
+                })
+                .collect::<HashSet<_>>();
+
+            // text is only compared between hits in the same buffer and time.
+            let mut local = HashMap::<_, Vec<&Hit>>::new();
+            for hit in &self.local {
+                local
+                    .entry((&hit.buffer, hit.message.time.utc))
+                    .or_default()
+                    .push(hit);
+            }
+
+            hits.extend(
+                self.remotes
+                    .iter()
+                    .flat_map(|remote| &remote.hits)
+                    .filter(|hit| {
+                        !hit.message.id.as_ref().is_some_and(|id| {
+                            msgids.contains(&(hit.buffer.as_server(), id))
+                        }) && !local
+                            .get(&(&hit.buffer, hit.message.time.utc))
+                            .is_some_and(|stored| {
+                                stored.iter().any(|stored| {
+                                    stored.message.text() == hit.message.text()
+                                })
+                            })
+                    })
+                    .cloned(),
+            );
+        }
+
+        let cutoff = self.cutoff();
+
+        hits.retain(|hit| {
+            cutoff.is_none_or(|cutoff| hit.message.time.utc >= cutoff)
+        });
+        hits.sort_by_key(|hit| std::cmp::Reverse(hit.message.time.utc));
+
+        self.hits = hits;
+    }
+
+    fn is_remote_loading(&self) -> bool {
+        self.remotes
+            .iter()
+            .any(|remote| remote.status == RemoteStatus::Loading)
     }
 
     pub fn result_count(&self) -> Option<usize> {
@@ -129,7 +237,7 @@ impl Search {
     pub fn update(
         &mut self,
         message: Message,
-        clients: &client::Map,
+        clients: &mut client::Map,
         storage: &storage::Manager,
         config: &Config,
     ) -> (Task<Message>, Option<Event>) {
@@ -153,19 +261,106 @@ impl Search {
             Message::Debounced(generation) => {
                 if generation == self.generation && self.status == Status::Stale
                 {
-                    (self.run(storage, search::Range::Latest), None)
+                    let remote = Task::perform(
+                        time::sleep(REMOTE_DEBOUNCE.saturating_sub(DEBOUNCE)),
+                        move |()| Message::RemoteDebounced(generation),
+                    );
+
+                    (
+                        Task::batch([
+                            self.run(storage, search::Range::Latest),
+                            remote,
+                        ]),
+                        None,
+                    )
+                } else {
+                    (Task::none(), None)
+                }
+            }
+            Message::RemoteDebounced(generation) => {
+                if generation == self.generation && self.remotes.is_empty() {
+                    (self.run_remote(clients), None)
                 } else {
                     (Task::none(), None)
                 }
             }
             Message::LoadMore => {
+                let Some(cutoff) = self.cutoff() else {
+                    return (Task::none(), None);
+                };
+
+                let mut tasks = vec![];
+
                 if self.status == Status::Loaded
                     && let Some(next) = self.next
+                    && self.local_frontier() == Some(cutoff)
                 {
-                    (self.run(storage, search::Range::Before(next)), None)
-                } else {
-                    (Task::none(), None)
+                    tasks.push(self.run(storage, search::Range::Before(next)));
                 }
+
+                let query = search::Query::parse(&self.query);
+                let generation = self.generation;
+
+                for remote in &mut self.remotes {
+                    if remote.status != RemoteStatus::More
+                        || remote.before != Some(cutoff)
+                    {
+                        continue;
+                    }
+
+                    if let Some(task) = remote_search(
+                        clients,
+                        &remote.server,
+                        &query,
+                        remote.before,
+                        generation,
+                    ) {
+                        remote.status = RemoteStatus::Loading;
+                        tasks.push(task);
+                    } else {
+                        remote.status = RemoteStatus::Done;
+                    }
+                }
+
+                self.merge();
+
+                (Task::batch(tasks), None)
+            }
+            Message::RemoteResults(generation, server, result) => {
+                if generation != self.generation {
+                    return (Task::none(), None);
+                }
+
+                let Some(remote) = self
+                    .remotes
+                    .iter_mut()
+                    .find(|remote| remote.server == server)
+                else {
+                    return (Task::none(), None);
+                };
+
+                match result {
+                    Ok(page) => {
+                        remote.status = if page.more && page.oldest.is_some() {
+                            RemoteStatus::More
+                        } else {
+                            RemoteStatus::Done
+                        };
+                        remote.before = page.oldest.or(remote.before);
+
+                        remote.hits.extend(page.messages.into_iter().map(
+                            |message| Arc::new(remote_hit(&server, message)),
+                        ));
+                    }
+                    Err(error) => {
+                        log::warn!("[{server}] server search failed: {error}");
+                        remote.status = RemoteStatus::Done;
+                    }
+                }
+
+                self.merge();
+
+                (Task::none(), None)
             }
             Message::Scrolled(scrolled) => {
                 self.scrolled = scrolled;
@@ -181,8 +376,9 @@ impl Search {
                     Err(error) => {
                         log::warn!("search failed: {error}");
                         if range == search::Range::Latest {
-                            self.hits.clear();
+                            self.local.clear();
                             self.next = None;
+                            self.merge();
                         }
                         self.status = Status::Failed(error.to_string());
                         return (Task::none(), None);
@@ -196,23 +392,24 @@ impl Search {
                 let hits = page
                     .hits
                     .into_iter()
-                    .filter_map(|hit| resolve(hit, &servers, clients));
+                    .filter_map(|hit| resolve(hit, &servers, clients))
+                    .map(Arc::new);
 
                 let task = match range {
                     search::Range::Before(_) => {
-                        self.hits.extend(hits);
+                        self.local.extend(hits);
                         self.next = page.next;
                         Task::none()
                     }
                     // Fewer than a page newer, so no gap to the current hits.
                     search::Range::After(_) if page.next.is_none() => {
-                        self.hits.splice(0..0, hits);
+                        self.local.splice(0..0, hits);
                         self.newest = page.newest.or(self.newest);
                         Task::none()
                     }
                     search::Range::Latest | search::Range::After(_) => {
-                        self.hits.clear();
-                        self.hits.extend(hits);
+                        self.local.clear();
+                        self.local.extend(hits);
                         self.newest = page.newest;
                         self.next = page.next;
                         self.scrolled = false;
@@ -224,6 +421,7 @@ impl Search {
                     }
                 };
                 self.status = Status::Loaded;
+                self.merge();
 
                 (Task::batch([task, self.catch_up(storage)]), None)
             }
@@ -264,6 +462,28 @@ impl Search {
         )
     }
 
+    fn run_remote(&mut self, clients: &mut client::Map) -> Task<Message> {
+        let query = search::Query::parse(&self.query);
+        let servers = clients.servers().cloned().collect::<Vec<_>>();
+        let mut tasks = vec![];
+
+        for server in servers {
+            if let Some(task) =
+                remote_search(clients, &server, &query, None, self.generation)
+            {
+                self.remotes.push(Remote {
+                    server,
+                    status: RemoteStatus::Loading,
+                    hits: vec![],
+                    before: None,
+                });
+                tasks.push(task);
+            }
+        }
+
+        Task::batch(tasks)
+    }
+
     pub fn focus(&self) -> Task<Message> {
         let input_id = self.input_id.clone();
 
@@ -281,6 +501,42 @@ impl Search {
         } else {
             focus
         }
+    }
+}
+
+fn remote_search(
+    clients: &mut client::Map,
+    server: &Server,
+    query: &search::Query,
+    before: Option<Timestamp>,
+    generation: u64,
+) -> Option<Task<Message>> {
+    let search = clients
+        .client_mut(server)?
+        .request_soju_search(query, before)?;
+    let server = server.clone();
+
+    Some(Task::perform(search, move |result| {
+        Message::RemoteResults(generation, server, result)
+    }))
+}
+
+fn remote_hit(server: &Server, message: data::Message) -> Hit {
+    let buffer = match &message.target {
+        message::Target::Channel { channel } => {
+            buffer::Upstream::Channel(server.clone(), channel.clone())
+        }
+        message::Target::Query { query } => {
+            buffer::Upstream::Query(server.clone(), query.clone())
+        }
+        _ => buffer::Upstream::Server(server.clone()),
+    };
+
+    Hit {
+        kind: history::Kind::from(buffer.clone()),
+        date: message.time.system_date(),
+        buffer,
+        message,
     }
 }
 
@@ -418,10 +674,17 @@ pub fn view<'a>(
             hit.buffer.clone(),
             hit.buffer.as_server(),
             hit.buffer.as_channel(),
-            message::MessageLink::Message(
-                hit.message.history_id,
-                hit.message.time,
-            ),
+            if hit.message.history_id == history::Id::Undetermined {
+                message::MessageLink::Remote(message::Pointer {
+                    id: hit.message.id.clone(),
+                    time: hit.message.time,
+                })
+            } else {
+                message::MessageLink::Message(
+                    hit.message.history_id,
+                    hit.message.time,
+                )
+            },
             clients,
             previews,
             config,
@@ -451,6 +714,9 @@ pub fn view<'a>(
         let reason = match &state.status {
             Status::Idle => None,
             Status::Stale | Status::Loading => Some("...".to_string()),
+            Status::Loaded | Status::Updating if state.is_remote_loading() => {
+                Some("...".to_string())
+            }
             Status::Loaded | Status::Updating => {
                 Some("No messages found".to_string())
             }

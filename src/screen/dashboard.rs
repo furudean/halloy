@@ -96,6 +96,7 @@ pub enum Message {
     ConfigReloadComplete,
     Model(model::Message),
     Indexed,
+    ChathistoryAround(model::Navigation, message::Pointer),
 }
 
 #[derive(Debug)]
@@ -1591,6 +1592,11 @@ impl Dashboard {
             Message::ConfigReloadComplete => {
                 self.reloading_config = false;
             }
+            Message::ChathistoryAround(navigation, pointer) => {
+                if navigation.token.strong_count() != 0 {
+                    storage.request_fetched_message_source(navigation, pointer);
+                }
+            }
             Message::Indexed => {
                 let tasks = self
                     .panes
@@ -1658,7 +1664,42 @@ impl Dashboard {
                             None,
                         );
                     }
-                    Some(model::Event::GoToMessage(_)) | None => (),
+                    Some(model::Event::MissingMessage(navigation, pointer))
+                        if navigation.token.strong_count() != 0 =>
+                    {
+                        let around =
+                            navigation.buffer.target().and_then(|target| {
+                                clients.request_chathistory_around(
+                                    navigation.buffer.as_server(),
+                                    target,
+                                    &pointer.references(),
+                                    pointer.time.utc,
+                                )
+                            });
+
+                        return match around {
+                            Some(around) => (
+                                Task::perform(around, move |_| {
+                                    Message::ChathistoryAround(
+                                        navigation, pointer,
+                                    )
+                                }),
+                                None,
+                            ),
+                            None => {
+                                self.pending_navigation = None;
+                                (
+                                    self.go_to_message(
+                                        navigation, clients, storage, config,
+                                    ),
+                                    None,
+                                )
+                            }
+                        };
+                    }
+                    Some(model::Event::GoToMessage(_))
+                    | Some(model::Event::MissingMessage(..))
+                    | None => (),
                 }
             }
         }
@@ -2486,6 +2527,34 @@ impl Dashboard {
                         self.pending_navigation = Some(token);
                         storage.request_highlight_source(navigation, highlight);
                     }
+                    message::MessageLink::Remote(pointer) => {
+                        let open = self.go_to_message(
+                            navigation.clone(),
+                            clients,
+                            storage,
+                            config,
+                        );
+                        let token = Arc::new(());
+                        navigation.token = Arc::downgrade(&token);
+                        self.pending_navigation = Some(token);
+
+                        storage.request_message_source(navigation, pointer);
+
+                        return (open, None);
+                    }
+                }
+            }
+            buffer::Event::RequestChathistoryGap(edge) => {
+                if let Some((server, target)) =
+                    pane.buffer.upstream().and_then(|upstream| {
+                        upstream
+                            .target()
+                            .map(|target| (upstream.as_server(), target))
+                    })
+                {
+                    clients.request_chathistory_gap(server, target, &edge);
+
+                    return (Task::none(), None);
                 }
             }
             buffer::Event::RequestOlderChathistory => {

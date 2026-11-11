@@ -3,7 +3,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context as ErrorContext, Result, anyhow};
+use futures::channel::oneshot;
 use hashbrown::HashMap;
+use jiff::Timestamp;
 
 use super::{CLIENT_CHATHISTORY_LIMIT, Client, Event, Topic};
 use crate::buffer::{self, BuffersContext};
@@ -13,7 +15,7 @@ use crate::capabilities::{
 use crate::config::server::filehost;
 use crate::features::{self, Features};
 use crate::history::reroute::RerouteRules;
-use crate::history::{ReadMarker, storage};
+use crate::history::{ReadMarker, gap, storage};
 use crate::isupport::{self, ChathistoryState, ChathistorySubcommand};
 use crate::rate_limit::TokenPriority;
 use crate::server::{self, Server};
@@ -725,6 +727,28 @@ impl Map {
         if let Some(client) = self.client_mut(server) {
             client.request_older_chathistory(target, priority, storage);
         }
+    }
+
+    pub fn request_chathistory_gap(
+        &mut self,
+        server: &Server,
+        target: Target,
+        edge: &gap::Edge,
+    ) {
+        if let Some(client) = self.client_mut(server) {
+            client.request_chathistory_gap(target, edge);
+        }
+    }
+
+    pub fn request_chathistory_around(
+        &mut self,
+        server: &Server,
+        target: Target,
+        references: &message::MessageReferences,
+        time: Timestamp,
+    ) -> Option<oneshot::Receiver<()>> {
+        self.client_mut(server)?
+            .request_chathistory_around(target, references, time)
     }
 
     pub fn clear_chathistory_request(

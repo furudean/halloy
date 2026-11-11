@@ -43,6 +43,7 @@ pub enum Capability {
     ReadMarker,
     Relaymsg,
     Sasl,
+    Search,
     ServerTime,
     Setname,
     UserhostInNames,
@@ -80,6 +81,7 @@ impl FromStr for Capability {
             "server-time" => Ok(Self::ServerTime),
             "setname" => Ok(Self::Setname),
             "soju.im/bouncer-networks" => Ok(Self::BouncerNetworks),
+            "soju.im/search" => Ok(Self::Search),
             "userhost-in-names" => Ok(Self::UserhostInNames),
             _ if cap.starts_with("sasl") => Ok(Self::Sasl),
             _ => Err("unknown capability"),
@@ -344,6 +346,7 @@ impl Capabilities {
                 | Capability::ReadMarker
                 | Capability::Relaymsg
                 | Capability::Sasl
+                | Capability::Search
                 | Capability::ServerTime
                 | Capability::Setname
                 | Capability::UserhostInNames
@@ -500,6 +503,15 @@ impl Capabilities {
         if let Some(request) = self.create_request(
             "soju.im/bouncer-networks",
             &[],
+            available,
+            config,
+        ) {
+            requested.push(request);
+        }
+
+        if let Some(request) = self.create_request(
+            "soju.im/search",
+            &["batch", "server-time"],
             available,
             config,
         ) {

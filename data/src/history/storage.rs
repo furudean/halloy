@@ -16,7 +16,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use super::filter::{Filter, FilterChain};
 use super::reroute::RerouteRules;
 use super::{
-    Id, Kind, Metadata, ReadMarker, Request, database, model, search,
+    Id, Kind, Metadata, ReadMarker, Request, database, gap, model, search,
     smart_filter_internal_message, smart_filter_message, smart_filter_repeat,
 };
 use crate::buffer::{self, BuffersContext};
@@ -81,6 +81,7 @@ pub enum Update {
     HidePreview(Kind, Id, message::Time, url::Url),
     ReadMarker(Kind, ReadMarker),
     ShowInSidebar(Kind, bool),
+    Fill(Kind, gap::Fill),
 }
 
 #[derive(Debug)]
@@ -174,7 +175,8 @@ impl Manager {
                 | Update::ShowPreview(kind, ..)
                 | Update::HidePreview(kind, ..)
                 | Update::ReadMarker(kind, ..)
-                | Update::ShowInSidebar(kind, ..) => Some(kind.clone()),
+                | Update::ShowInSidebar(kind, ..)
+                | Update::Fill(kind, ..) => Some(kind.clone()),
             } {
                 let kind_updates =
                     updates_by_kind.entry(kind).or_insert(vec![]);
@@ -791,6 +793,40 @@ impl Manager {
         } else {
             self.worker
                 .send(worker::Command::HighlightSource(navigation, highlight));
+        }
+    }
+
+    pub fn request_message_source(
+        &mut self,
+        navigation: model::Navigation,
+        pointer: message::Pointer,
+    ) {
+        self.message_source(navigation, pointer, true);
+    }
+
+    pub fn request_fetched_message_source(
+        &mut self,
+        navigation: model::Navigation,
+        pointer: message::Pointer,
+    ) {
+        self.message_source(navigation, pointer, false);
+    }
+
+    fn message_source(
+        &mut self,
+        mut navigation: model::Navigation,
+        pointer: message::Pointer,
+        fetch: bool,
+    ) {
+        navigation.message = None;
+        if self.failure.is_some() || self.exiting {
+            let _ = self.event_sender.send(vec![Event::Model(
+                model::Message::GoToMessage(navigation),
+            )]);
+        } else {
+            self.worker.send(worker::Command::MessageSource(
+                navigation, pointer, fetch,
+            ));
         }
     }
 

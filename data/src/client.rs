@@ -1,14 +1,14 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::BinaryHeap;
 use std::collections::binary_heap::PeekMut;
+use std::collections::{BinaryHeap, VecDeque};
 use std::mem::take;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{fmt, io, iter};
 
 use anyhow::{Context as ErrorContext, Result, anyhow, bail};
-use futures::channel::mpsc;
+use futures::channel::{mpsc, oneshot};
 use hashbrown::{HashMap, HashSet};
 use indexmap::IndexMap;
 use irc::proto::{self, Command, Tags, command, tags};
@@ -28,7 +28,7 @@ use crate::command::Irc;
 use crate::environment::{SOURCE_WEBSITE, VERSION};
 use crate::features::{Features, VersionRequest};
 use crate::history::reroute::RerouteRules;
-use crate::history::{self, ReadMarker, storage};
+use crate::history::{self, ReadMarker, gap, search, storage};
 use crate::isupport::{
     ChathistorySubcommand, MessageReference, WhoToken, find_target_limit,
     format_optional_message_reference,
@@ -133,13 +133,35 @@ pub enum Event {
     ShowInSidebar(Target),
     AuthenticationFailed(Option<String>),
     UpdateIcon,
+    ChathistoryFill(Target, gap::Fill),
 }
+
+type SearchReply = oneshot::Sender<Result<search::ServerPage, search::Error>>;
 
 struct ChathistoryRequest {
     subcommand: ChathistorySubcommand,
     requested_at: Instant,
     autorequest: bool,
     continuation_message_reference: Option<MessageReference>,
+    purpose: ChathistoryPurpose,
+    /// server times of the oldest and newest messages received
+    extent: Option<(Timestamp, Timestamp)>,
+}
+
+#[derive(Debug, Default)]
+enum ChathistoryPurpose {
+    #[default]
+    Backlog,
+    Gap {
+        side: gap::Side,
+        edge: Timestamp,
+        /// The far side of the gap when the request stops there.
+        bound: Option<Timestamp>,
+    },
+    Around {
+        reply: Option<oneshot::Sender<()>>,
+        time: Timestamp,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -186,6 +208,8 @@ pub struct Client {
     resend_lookups: HashMap<(history::Kind, history::Id), Arc<()>>,
     chathistory_exhausted: HashMap<Target, bool>,
     chathistory_targets_request: Option<ChathistoryRequest>,
+    chathistory_around_unsupported: bool,
+    pending_searches: VecDeque<SearchReply>,
     notification_blackout: NotificationBlackout,
     registration_required_channels: Vec<target::Channel>,
     isupport: HashMap<isupport::Kind, isupport::Parameter>,
@@ -254,6 +278,8 @@ impl Client {
             resend_lookups: HashMap::new(),
             chathistory_exhausted: HashMap::new(),
             chathistory_targets_request: None,
+            chathistory_around_unsupported: false,
+            pending_searches: VecDeque::new(),
             notification_blackout: NotificationBlackout::Blackout(
                 Instant::now(),
             ),
@@ -1260,6 +1286,27 @@ impl Client {
                                 buffers_context,
                                 config,
                             ),
+                        Some(BatchKind::Search(_, _)) => {
+                            let time = message.server_time();
+                            let result = self.soju_search_result(
+                                message,
+                                storage,
+                                buffers_context,
+                                config,
+                            );
+
+                            if let Some(Batch {
+                                kind: Some(BatchKind::Search(_, page)),
+                                ..
+                            }) = self.batches.get_mut(batch_tag)
+                            {
+                                page.messages.extend(result);
+                                page.oldest =
+                                    page.oldest.into_iter().chain(time).min();
+                            }
+
+                            vec![]
+                        }
                     };
 
                     if let Some(batch) = self.batches.get_mut(batch_tag) {
@@ -3535,7 +3582,65 @@ impl Client {
                     return Ok(vec![]);
                 }
             }
-            Command::FAIL(command, code, context, _) => {
+            Command::FAIL(command, code, context, description) => {
+                if command == "CHATHISTORY"
+                    && context
+                        .as_ref()
+                        .and_then(|context| context.first())
+                        .is_some_and(|subcommand| subcommand == "AROUND")
+                    && let Some(target) = self
+                        .chathistory_requests
+                        .iter()
+                        .find_map(|(target, request)| {
+                            matches!(
+                                request.subcommand,
+                                ChathistorySubcommand::Around(..)
+                            )
+                            .then(|| target.clone())
+                        })
+                {
+                    log::debug!(
+                        "[{}] CHATHISTORY AROUND failed ({code}): {description}",
+                        self.server
+                    );
+
+                    self.chathistory_around_unsupported = true;
+
+                    if let Some(ChathistoryRequest {
+                        subcommand:
+                            ChathistorySubcommand::Around(_, reference, limit),
+                        purpose,
+                        ..
+                    }) = self.chathistory_requests.remove(&target)
+                    {
+                        let subcommand = self.around_fallback(
+                            target, reference, &purpose, limit,
+                        );
+
+                        self.send_chathistory_request_with_purpose(
+                            subcommand,
+                            TokenPriority::User,
+                            purpose,
+                        );
+                    }
+
+                    return Ok(vec![]);
+                }
+
+                if command == "SEARCH"
+                    && let Some(reply) = self.pending_searches.pop_front()
+                {
+                    log::warn!(
+                        "[{}] Search failed ({code}): {description}",
+                        self.server
+                    );
+
+                    let _ = reply
+                        .send(Err(search::Error::Server(description.clone())));
+
+                    return Ok(vec![]);
+                }
+
                 if command == "METADATA"
                     && code == "KEY_INVALID"
                     && let Some(key) =
@@ -3549,6 +3654,17 @@ impl Client {
 
                     // Expected as part of requesting keys via METADATA SUB,
                     // hide from the user.
+                    return Ok(vec![]);
+                }
+            }
+            Command::Numeric(ERR_UNKNOWNCOMMAND, args)
+                if args.get(1).is_some_and(|command| command == "SEARCH") =>
+            {
+                if let Some(reply) = self.pending_searches.pop_front() {
+                    let _ = reply.send(Err(search::Error::Server(
+                        "Search is not supported by the server".to_string(),
+                    )));
+
                     return Ok(vec![]);
                 }
             }
@@ -3683,6 +3799,11 @@ impl Client {
                 ))
             }),
             Some("labeled-response") => Some(BatchKind::LabeledResponse),
+            // The spec names the batch both ways; soju sends soju.im/search.
+            Some("soju.im/search" | "search") => Some(BatchKind::Search(
+                self.pending_searches.pop_front(),
+                search::ServerPage::default(),
+            )),
             _ => None,
         };
 
@@ -3770,6 +3891,14 @@ impl Client {
                 )?);
             }
 
+            if let Some(BatchKind::Search(reply, page)) = &mut finished.kind
+                && let Some(reply) = reply.take()
+            {
+                // Dropped results still count toward the server's page.
+                page.more = usize::from(finished.size) >= search::PAGE_SIZE;
+                let _ = reply.send(Ok(take(page)));
+            }
+
             if let Some(parent) =
                 batch_tag.and_then(|batch| self.batches.get_mut(batch))
             {
@@ -3795,6 +3924,23 @@ impl Client {
                                 finished.chathistory_end,
                             );
 
+                        let (missing, complete) = self.chathistory_fill(
+                            batch_target,
+                            finished.size,
+                            finished.chathistory_end,
+                            continuation_subcommand.is_some(),
+                        );
+
+                        // The missing message opens its gap before the batch's
+                        // messages land.
+                        finished.events.splice(0..0, missing);
+                        finished.events.extend(complete);
+
+                        let extent = self
+                            .chathistory_requests
+                            .get(batch_target)
+                            .and_then(|request| request.extent);
+
                         self.clear_chathistory_request(Some(batch_target));
 
                         if let Some(continuation_subcommand) =
@@ -3804,6 +3950,12 @@ impl Client {
                                 continuation_subcommand,
                                 TokenPriority::High,
                             );
+
+                            if let Some(request) =
+                                self.chathistory_requests.get_mut(batch_target)
+                            {
+                                request.extent = extent;
+                            }
                         }
                     }
                     Some(BatchKind::ChathistoryTargets) => {
@@ -3833,6 +3985,7 @@ impl Client {
                     Some(BatchKind::Multiline(_, _, _, _, _))
                     | Some(BatchKind::ZncPlayback(_))
                     | Some(BatchKind::LabeledResponse)
+                    | Some(BatchKind::Search(_, _))
                     | None => (),
                 };
 
@@ -3859,6 +4012,16 @@ impl Client {
             // that complexity by only providing that functionality via
             // event-playback.
             return vec![];
+        }
+
+        if let Some(request) = self.chathistory_requests.get_mut(&target)
+            && let Some(time) = message.server_time()
+        {
+            request.extent = Some(
+                request.extent.map_or((time, time), |(oldest, newest)| {
+                    (oldest.min(time), newest.max(time))
+                }),
+            );
         }
 
         if let Some(ChathistoryRequest {
@@ -4208,6 +4371,70 @@ impl Client {
         }
     }
 
+    pub fn request_soju_search(
+        &mut self,
+        query: &search::Query,
+        before: Option<Timestamp>,
+    ) -> Option<
+        impl Future<Output = Result<search::ServerPage, search::Error>> + use<>,
+    > {
+        if !self.capabilities.acknowledged(Capability::Search)
+            || self.connection_role() == ConnectionRole::BouncerControl
+        {
+            return None;
+        }
+
+        let mut attributes = tags!["in" => query.within.as_deref()?];
+
+        if let Some(sender) = &query.from {
+            attributes.insert("from".to_string(), sender.clone());
+        }
+
+        if let Some(text) = query.text() {
+            attributes.insert("text".to_string(), text);
+        }
+
+        if let Some(before) = before {
+            attributes.insert(
+                "before".to_string(),
+                Timestamp::strftime(&before, RFC3339_WITH_MILLIS).to_string(),
+            );
+        }
+
+        attributes.insert("limit".to_string(), search::PAGE_SIZE.to_string());
+
+        self.send(
+            None,
+            command!("SEARCH", proto::format::tags(attributes)).into(),
+            TokenPriority::User,
+        );
+
+        let (reply, receiver) = oneshot::channel();
+        self.pending_searches.push_back(reply);
+
+        Some(
+            async move { receiver.await.unwrap_or(Err(search::Error::Stopped)) },
+        )
+    }
+
+    fn soju_search_result(
+        &self,
+        message: message::Encoded,
+        storage: &storage::Manager,
+        buffers_context: &dyn BuffersContext,
+        config: &config::Config,
+    ) -> Option<message::Message> {
+        match &message.command {
+            Command::PRIVMSG(_, text) | Command::NOTICE(_, text)
+                if !ctcp::is_query(text) || message::is_action(text) =>
+            {
+                self.process_message(message, storage, buffers_context, config)
+                    .map(message::Message::from)
+            }
+            _ => None,
+        }
+    }
+
     pub fn chathistory_limit(&self) -> u16 {
         if let Some(isupport::Parameter::CHATHISTORY(server_limit)) =
             self.isupport.get(&isupport::Kind::CHATHISTORY)
@@ -4327,6 +4554,19 @@ impl Client {
         subcommand: ChathistorySubcommand,
         priority: TokenPriority,
     ) {
+        self.send_chathistory_request_with_purpose(
+            subcommand,
+            priority,
+            ChathistoryPurpose::Backlog,
+        );
+    }
+
+    fn send_chathistory_request_with_purpose(
+        &mut self,
+        subcommand: ChathistorySubcommand,
+        priority: TokenPriority,
+        purpose: ChathistoryPurpose,
+    ) {
         if self.capabilities.acknowledged(Capability::Chathistory)
             && (matches!(priority, TokenPriority::User)
                 || self.config.automated_chathistory)
@@ -4365,6 +4605,8 @@ impl Client {
                                 TokenPriority::User
                             ),
                             continuation_message_reference: None,
+                            purpose,
+                            extent: None,
                         },
                     );
                 } else {
@@ -4378,6 +4620,8 @@ impl Client {
                     requested_at: Instant::now(),
                     autorequest: !matches!(priority, TokenPriority::User),
                     continuation_message_reference: None,
+                    purpose,
+                    extent: None,
                 });
             }
 
@@ -4438,6 +4682,59 @@ impl Client {
                             "BEFORE",
                             target.to_string(),
                             command_message_reference.to_string(),
+                            limit.to_string(),
+                        )
+                        .into(),
+                        priority,
+                    );
+                }
+                ChathistorySubcommand::After(
+                    target,
+                    message_reference,
+                    limit,
+                ) => {
+                    let command_message_reference =
+                        isupport::fuzz_start_message_reference(
+                            message_reference,
+                        );
+
+                    log::debug!(
+                        "[{}] requesting {limit} messages in {target} after {}",
+                        self.server,
+                        command_message_reference,
+                    );
+
+                    self.send(
+                        None,
+                        command!(
+                            "CHATHISTORY",
+                            "AFTER",
+                            target.to_string(),
+                            command_message_reference.to_string(),
+                            limit.to_string(),
+                        )
+                        .into(),
+                        priority,
+                    );
+                }
+                ChathistorySubcommand::Around(
+                    target,
+                    message_reference,
+                    limit,
+                ) => {
+                    log::debug!(
+                        "[{}] requesting {limit} messages in {target} around {}",
+                        self.server,
+                        message_reference,
+                    );
+
+                    self.send(
+                        None,
+                        command!(
+                            "CHATHISTORY",
+                            "AROUND",
+                            target.to_string(),
+                            message_reference.to_string(),
                             limit.to_string(),
                         )
                         .into(),
@@ -4598,6 +4895,28 @@ impl Client {
 
                     None
                 }
+                ChathistorySubcommand::After(target, message_reference, _) => {
+                    log::debug!(
+                        "[{}] received {} messages in {} after {}",
+                        self.server,
+                        size,
+                        target,
+                        message_reference,
+                    );
+
+                    None
+                }
+                ChathistorySubcommand::Around(target, message_reference, _) => {
+                    log::debug!(
+                        "[{}] received {} messages in {} around {}",
+                        self.server,
+                        size,
+                        target,
+                        message_reference,
+                    );
+
+                    None
+                }
                 ChathistorySubcommand::Between(
                     target,
                     start_message_reference,
@@ -4665,6 +4984,189 @@ impl Client {
         } else {
             None
         }
+    }
+
+    fn chathistory_fill(
+        &mut self,
+        target: &Target,
+        size: u16,
+        chathistory_end: bool,
+        continues: bool,
+    ) -> (Option<Event>, Option<Event>) {
+        let Some(request) = self.chathistory_requests.get_mut(target) else {
+            return (None, None);
+        };
+        let (ChathistorySubcommand::Latest(_, _, limit)
+        | ChathistorySubcommand::Before(_, _, limit)
+        | ChathistorySubcommand::After(_, _, limit)
+        | ChathistorySubcommand::Around(_, _, limit)
+        | ChathistorySubcommand::Between(_, _, _, limit)) = request.subcommand
+        else {
+            return (None, None);
+        };
+        let exhausted = chathistory_end || size < limit;
+        let oldest = request.extent.map(|(oldest, _)| oldest);
+        let newest = request.extent.map(|(_, newest)| newest);
+
+        let (missing, complete) = match &mut request.purpose {
+            ChathistoryPurpose::Backlog => match request.subcommand {
+                // LATEST without a reference that runs dry covers all history
+                ChathistorySubcommand::Latest(_, None, _)
+                    if exhausted && !continues =>
+                {
+                    (None, Some((None, None)))
+                }
+                ChathistorySubcommand::Latest(..)
+                | ChathistorySubcommand::Between(..)
+                    if !continues =>
+                {
+                    (None, oldest.map(|oldest| (Some(oldest), None)))
+                }
+                _ => (None, None),
+            },
+            ChathistoryPurpose::Gap {
+                side: gap::Side::Older,
+                edge,
+                bound,
+            } => (
+                None,
+                if exhausted {
+                    Some((*bound, Some(*edge)))
+                } else {
+                    oldest.map(|oldest| (Some(oldest.min(*edge)), Some(*edge)))
+                },
+            ),
+            ChathistoryPurpose::Gap {
+                side: gap::Side::Newer,
+                edge,
+                bound,
+            } => (
+                None,
+                if exhausted {
+                    Some((Some(*edge), *bound))
+                } else {
+                    newest.map(|newest| (Some(*edge), Some(newest.max(*edge))))
+                },
+            ),
+            ChathistoryPurpose::Around { reply, time } => {
+                if let Some(reply) = reply.take() {
+                    let _ = reply.send(());
+                }
+
+                match request.extent {
+                    Some((oldest, newest)) => (
+                        Some(gap::Fill::Missing(*time)),
+                        Some((Some(oldest), Some(newest))),
+                    ),
+                    None => (None, None),
+                }
+            }
+        };
+
+        let event = |fill| Event::ChathistoryFill(target.clone(), fill);
+
+        (
+            missing.map(event),
+            complete.map(|(from, to)| event(gap::Fill::Complete { from, to })),
+        )
+    }
+
+    pub fn request_chathistory_gap(
+        &mut self,
+        target: Target,
+        edge: &gap::Edge,
+    ) {
+        let types = self.chathistory_message_reference_types();
+        let Some(reference) = edge.references.message_reference(types) else {
+            return;
+        };
+        let across = edge
+            .across_references
+            .as_ref()
+            .and_then(|references| references.message_reference(types));
+        let bound = across.as_ref().and(edge.across);
+        let limit = self.chathistory_limit();
+
+        let subcommand = match across {
+            Some(across) => {
+                ChathistorySubcommand::Between(target, reference, across, limit)
+            }
+            None => match edge.side {
+                gap::Side::Older => {
+                    ChathistorySubcommand::Before(target, reference, limit)
+                }
+                gap::Side::Newer => {
+                    ChathistorySubcommand::After(target, reference, limit)
+                }
+            },
+        };
+
+        self.send_chathistory_request_with_purpose(
+            subcommand,
+            TokenPriority::User,
+            ChathistoryPurpose::Gap {
+                side: edge.side,
+                edge: edge.time,
+                bound,
+            },
+        );
+    }
+
+    pub fn request_chathistory_around(
+        &mut self,
+        target: Target,
+        references: &message::MessageReferences,
+        time: Timestamp,
+    ) -> Option<oneshot::Receiver<()>> {
+        if !self.capabilities.acknowledged(Capability::Chathistory) {
+            return None;
+        }
+
+        let reference = references
+            .message_reference(self.chathistory_message_reference_types())?;
+        let limit = self.chathistory_limit();
+        let (reply, receiver) = oneshot::channel();
+        let purpose = ChathistoryPurpose::Around {
+            reply: Some(reply),
+            time,
+        };
+
+        let subcommand = if self.chathistory_around_unsupported {
+            self.around_fallback(target, reference, &purpose, limit)
+        } else {
+            ChathistorySubcommand::Around(target, reference, limit)
+        };
+
+        self.send_chathistory_request_with_purpose(
+            subcommand,
+            TokenPriority::User,
+            purpose,
+        );
+
+        Some(receiver)
+    }
+
+    /// Fetches forward from a message for servers without AROUND.
+    fn around_fallback(
+        &self,
+        target: Target,
+        reference: MessageReference,
+        purpose: &ChathistoryPurpose,
+        limit: u16,
+    ) -> ChathistorySubcommand {
+        // AFTER excludes a msgid reference, so start from the message's time
+        let reference = match purpose {
+            ChathistoryPurpose::Around { time, .. }
+                if self
+                    .chathistory_message_reference_types()
+                    .contains(&isupport::MessageReferenceType::Timestamp) =>
+            {
+                MessageReference::Timestamp(*time)
+            }
+            _ => reference,
+        };
+
+        ChathistorySubcommand::After(target, reference, limit)
     }
 
     pub fn chathistory_exhausted(&self, target: &Target) -> bool {
@@ -5375,6 +5877,7 @@ pub enum BatchKind {
     ),
     ZncPlayback(Target),
     LabeledResponse,
+    Search(Option<SearchReply>, search::ServerPage),
 }
 
 impl BatchKind {
@@ -5383,7 +5886,9 @@ impl BatchKind {
             Self::ChathistoryTarget(batch_target)
             | Self::Multiline(_, _, batch_target, _, _)
             | Self::ZncPlayback(batch_target) => Some(batch_target.clone()),
-            Self::ChathistoryTargets | Self::LabeledResponse => None,
+            Self::ChathistoryTargets
+            | Self::LabeledResponse
+            | Self::Search(_, _) => None,
         }
     }
 }
@@ -5965,6 +6470,8 @@ mod tests {
                 requested_at: Instant::now(),
                 autorequest: false,
                 continuation_message_reference: None,
+                purpose: ChathistoryPurpose::Backlog,
+                extent: None,
             },
         );
 

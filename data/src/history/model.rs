@@ -5,7 +5,7 @@ use jiff::Timestamp;
 use super::metadata::ReadMarker;
 use super::{
     Id, Kind, KindRef, find_message_by_history_id, find_message_by_id,
-    find_message_mut_by_history_id, position_message_by_history_id,
+    find_message_mut_by_history_id, gap, position_message_by_history_id,
 };
 use crate::message::{self, ReplyPreview, Searchable, Temporal};
 use crate::{Config, Server, config, target};
@@ -15,12 +15,14 @@ pub enum Message {
     Update(Kind, Update),
     Remove(Kind),
     GoToMessage(Navigation),
+    MissingMessage(Navigation, message::Pointer),
 }
 
 #[derive(Debug)]
 pub enum Event {
     Opened(Kind),
     GoToMessage(Navigation),
+    MissingMessage(Navigation, message::Pointer),
 }
 
 #[derive(Debug, Clone)]
@@ -123,6 +125,9 @@ impl Manager {
         match message {
             Message::GoToMessage(navigation) => {
                 Some(Event::GoToMessage(navigation))
+            }
+            Message::MissingMessage(navigation, pointer) => {
+                Some(Event::MissingMessage(navigation, pointer))
             }
             Message::Update(kind, update) => {
                 if let Some(model) = self.models.get_mut(&kind) {
@@ -235,6 +240,7 @@ pub enum Pane {
         clear: Option<Timestamp>,
         loading: bool,
         read_marker: Option<ReadMarker>,
+        gaps: gap::Edges,
     },
     Loading,
     Migrating,
@@ -257,6 +263,7 @@ impl Model {
                 clear,
                 loading,
                 read_marker,
+                gaps,
             } => {
                 let mut processed = process_messages(messages, config);
 
@@ -287,6 +294,7 @@ impl Model {
                             && *read_marker != self.display_read_marker),
                     migrating: false,
                     cleared: clear.is_some(),
+                    gaps: gaps.clone(),
                 }
             }
             Pane::Loading | Pane::Migrating => View {
@@ -521,6 +529,7 @@ pub struct View<'a> {
     pub loading: bool,
     pub migrating: bool,
     pub cleared: bool,
+    pub gaps: gap::Edges,
 }
 
 /// MessageDisplay processing that must happen at view-time (e.g. filtering

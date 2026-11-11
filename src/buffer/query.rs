@@ -2,7 +2,7 @@ use data::buffer::{self, BuffersContext};
 use data::client::{self, ClientsContext};
 use data::dashboard::BufferAction;
 use data::history::filter::FilterChain;
-use data::history::{self, model, storage};
+use data::history::{self, gap, model, storage};
 use data::preview::{self, Previews};
 use data::target::{self, Target};
 use data::user::Nick;
@@ -31,6 +31,7 @@ pub enum Event {
     Reconnect(Server),
     LeaveBuffers(Vec<Target>, Option<String>),
     RequestOlderChathistory,
+    RequestChathistoryGap(gap::Edge),
     PreviewChanged,
     HidePreview(history::Kind, history::Id, message::Time, url::Url),
     MarkAsRead(history::Kind),
@@ -342,6 +343,9 @@ impl Query {
                     scroll_view::Event::GoToMessage(..) => None,
                     scroll_view::Event::RequestOlderChathistory => {
                         Some(Event::RequestOlderChathistory)
+                    }
+                    scroll_view::Event::RequestChathistoryGap(edge) => {
+                        Some(Event::RequestChathistoryGap(edge))
                     }
                     scroll_view::Event::PreviewChanged => {
                         Some(Event::PreviewChanged)

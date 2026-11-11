@@ -1,5 +1,9 @@
 # Unreleased
 
+Added:
+
+- Search peeks the bouncer's stored history via `soju.im/search`
+
 Fixed:
 
 - Localization of default date separators and timestamp context menu formats

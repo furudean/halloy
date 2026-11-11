@@ -4003,10 +4003,27 @@ pub fn quit_text(
     )
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum MessageLink {
     Message(history::Id, message::Time),
     Highlight(history::Id),
+    Remote(Pointer),
+}
+
+#[derive(Debug, Clone)]
+pub struct Pointer {
+    pub id: Option<message::Id>,
+    pub time: message::Time,
+}
+
+impl Pointer {
+    pub fn references(&self) -> MessageReferences {
+        MessageReferences {
+            timestamp: matches!(self.time.source, time::Source::Server)
+                .then_some(self.time.utc),
+            id: self.id.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

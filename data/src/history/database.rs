@@ -9,7 +9,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use super::{Id, Kind, Metadata, ReadMarker, search, storage};
+use super::{Id, Kind, Metadata, ReadMarker, gap, search, storage};
 use crate::{isupport, message, reaction, redaction, user};
 
 pub(super) const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -22,6 +22,14 @@ const UNLABELED_ECHO_CANDIDATES: &str = "SELECT id, time, time_from_server, msgi
                        OR (?5 AND time = ?6))))
                  ORDER BY time, id";
 
+const GAP_SCHEMA: &str = "
+    CREATE TABLE chathistory_gap (
+        history INTEGER NOT NULL REFERENCES history(id) ON DELETE CASCADE,
+        older INTEGER NOT NULL,
+        newer INTEGER,
+        PRIMARY KEY (history, older)
+    ) WITHOUT ROWID;";
+
 const REFERENCE_TYPES: &[isupport::MessageReferenceType] = &[
     isupport::MessageReferenceType::MessageId,
     isupport::MessageReferenceType::Timestamp,
@@ -33,11 +41,12 @@ pub struct Extension {
     pub boundary: (i64, u64),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Window {
     pub messages: Vec<message::Message>,
     pub has_more_older: bool,
     pub has_more_newer: bool,
+    pub gaps: gap::Edges,
 }
 
 enum WindowSource {
@@ -57,12 +66,40 @@ impl WindowSource {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Gap {
+    older: i64,
+    newer: Option<i64>,
+}
+
+/// the stretch of a history between gaps
+#[derive(Debug, Clone, Copy, Default)]
+struct Stretch {
+    older: Option<Gap>,
+    newer: Option<Gap>,
+}
+
+impl Stretch {
+    fn is_bounded(self) -> bool {
+        self.older.is_some() || self.newer.is_some()
+    }
+
+    fn start(self) -> Option<i64> {
+        self.older.map(|gap| gap.older)
+    }
+
+    fn end(self) -> Option<i64> {
+        self.newer.map(|gap| gap.older)
+    }
+}
+
 #[derive(Clone, Copy)]
 struct WindowQuery {
     clear: Option<i64>,
     boundary: Bound<(i64, i64)>,
     descending: bool,
     count: usize,
+    stretch: Stretch,
 }
 
 impl WindowQuery {
@@ -86,8 +123,13 @@ impl WindowQuery {
         } else {
             ""
         };
+        let stretch = if self.stretch.is_bounded() {
+            " AND time > ?6 AND time <= ?7"
+        } else {
+            ""
+        };
         let select = format!(
-            "SELECT {columns} FROM message WHERE history = {history}{eligibility}{clear}"
+            "SELECT {columns} FROM message WHERE history = {history}{eligibility}{clear}{stretch}"
         );
         let order = self.order();
         if matches!(self.boundary, Bound::Unbounded) {
@@ -111,18 +153,25 @@ impl WindowQuery {
     fn params(
         self,
         history: rusqlite::types::Value,
-    ) -> [rusqlite::types::Value; 5] {
+    ) -> rusqlite::ParamsFromIter<Vec<rusqlite::types::Value>> {
         let (time, id) = match self.boundary {
             Bound::Included(key) | Bound::Excluded(key) => key,
             Bound::Unbounded => (0, 0),
         };
-        [
+        let mut params = vec![
             history,
             self.clear.into(),
             time.into(),
             id.into(),
             i64::try_from(self.count).unwrap_or(i64::MAX).into(),
-        ]
+        ];
+        if self.stretch.is_bounded() {
+            params.extend([
+                self.stretch.start().unwrap_or(i64::MIN).into(),
+                self.stretch.end().unwrap_or(i64::MAX).into(),
+            ]);
+        }
+        rusqlite::params_from_iter(params)
     }
 }
 
@@ -255,12 +304,19 @@ impl Database {
                     );
                     CREATE TABLE search_state (indexed INTEGER NOT NULL);
                     INSERT INTO search_state VALUES (0);
-                    CREATE TABLE search_pending (key INTEGER PRIMARY KEY, message INTEGER NOT NULL);
-                    PRAGMA user_version = 3;",
+                    CREATE TABLE search_pending (key INTEGER PRIMARY KEY, message INTEGER NOT NULL);",
                 )?;
+                transaction.execute_batch(GAP_SCHEMA)?;
+                transaction.execute_batch("PRAGMA user_version = 4;")?;
                 transaction.commit()?;
             }
-            3 => (),
+            3 => {
+                let transaction = connection.transaction()?;
+                transaction.execute_batch(GAP_SCHEMA)?;
+                transaction.execute_batch("PRAGMA user_version = 4;")?;
+                transaction.commit()?;
+            }
+            4 => (),
             other => return Err(Error::Schema(other)),
         }
         let indexed = connection.query_row(
@@ -463,23 +519,36 @@ impl Database {
         let clear = clear.map(Timestamp::as_microsecond);
         let count = limit.count();
         if count == 0 {
-            return Ok(Window {
-                messages: vec![],
-                has_more_older: false,
-                has_more_newer: false,
-            });
+            return Ok(Window::default());
         }
+        // monitor windows don't utilize gaps
+        let history = match &source {
+            WindowSource::History(id) => Some(*id),
+            WindowSource::Monitor(_) => None,
+        };
+        let stretch = |at: (i64, i64)| {
+            history.map_or(Ok(Stretch::default()), |history| {
+                self.stretch(history, at)
+            })
+        };
+        let with_edges = |mut window: Window, stretch: Stretch| {
+            if let Some(history) = history {
+                window.gaps = self.edges(history, stretch)?;
+            }
+            Ok::<_, Error>(window)
+        };
         if let Some(extension) = extension {
+            let boundary =
+                (extension.boundary.0, sql_id(extension.boundary.1)?);
+            let stretch = stretch(boundary)?;
             let mut messages = self.select_window(
                 &source,
                 WindowQuery {
                     clear,
-                    boundary: Bound::Excluded((
-                        extension.boundary.0,
-                        sql_id(extension.boundary.1)?,
-                    )),
+                    boundary: Bound::Excluded(boundary),
                     descending: extension.older,
                     count: count.saturating_add(1),
+                    stretch,
                 },
                 monitored,
             )?;
@@ -488,11 +557,15 @@ impl Database {
             if extension.older {
                 messages.reverse();
             }
-            return Ok(Window {
-                messages,
-                has_more_older: extension.older && more,
-                has_more_newer: !extension.older && more,
-            });
+            return with_edges(
+                Window {
+                    messages,
+                    has_more_older: extension.older && more,
+                    has_more_newer: !extension.older && more,
+                    ..Window::default()
+                },
+                stretch,
+            );
         }
         let anchor = match limit {
             message::Limit::Around(_, Id::Determined(id)) => {
@@ -523,6 +596,7 @@ impl Database {
                         )),
                         descending: true,
                         count: 1,
+                        stretch: Stretch::default(),
                     },
                 )?
                 .into_iter()
@@ -530,6 +604,7 @@ impl Database {
             _ => None,
         };
         if let Some((time, id)) = anchor {
+            let stretch = stretch((time, id))?;
             let select =
                 |descending: bool, count: usize, time: i64, id: i64| {
                     self.select_window(
@@ -543,6 +618,7 @@ impl Database {
                             },
                             descending,
                             count,
+                            stretch,
                         },
                         monitored,
                     )
@@ -583,20 +659,43 @@ impl Database {
                 );
             let start = position.saturating_sub(older);
             let end = position.saturating_add(newer).min(before.len());
-            return Ok(Window {
-                has_more_older: start != 0,
-                has_more_newer: end != before.len(),
-                messages: before.drain(start..end).collect(),
-            });
+            return with_edges(
+                Window {
+                    has_more_older: start != 0,
+                    has_more_newer: end != before.len(),
+                    messages: before.drain(start..end).collect(),
+                    ..Window::default()
+                },
+                stretch,
+            );
         }
         if matches!(limit, message::Limit::Around(..)) {
-            return Ok(Window {
-                messages: vec![],
-                has_more_older: false,
-                has_more_newer: false,
-            });
+            return Ok(Window::default());
         }
         let bottom = matches!(limit, message::Limit::Bottom(_));
+        let stretch = stretch(if bottom {
+            match history {
+                Some(history) => adjacent(
+                    &self.connection,
+                    history,
+                    (i64::MAX, i64::MAX),
+                    gap::Side::Older,
+                )?,
+                None => None,
+            }
+            .unwrap_or((i64::MAX, i64::MAX))
+        } else {
+            match (history, clear) {
+                (Some(history), Some(clear)) => adjacent(
+                    &self.connection,
+                    history,
+                    (clear, i64::MAX),
+                    gap::Side::Newer,
+                )?,
+                _ => None,
+            }
+            .unwrap_or((i64::MIN, i64::MIN))
+        })?;
         let mut messages = self.select_window(
             &source,
             WindowQuery {
@@ -604,6 +703,7 @@ impl Database {
                 boundary: Bound::Unbounded,
                 descending: bottom,
                 count: count.saturating_add(1),
+                stretch,
             },
             monitored,
         )?;
@@ -612,11 +712,127 @@ impl Database {
         if bottom {
             messages.reverse();
         }
-        Ok(Window {
-            messages,
-            has_more_older: bottom && more,
-            has_more_newer: !bottom && more,
-        })
+        with_edges(
+            Window {
+                messages,
+                has_more_older: bottom && more,
+                has_more_newer: !bottom && more,
+                ..Window::default()
+            },
+            stretch,
+        )
+    }
+
+    fn stretch(&self, history: i64, at: (i64, i64)) -> Result<Stretch, Error> {
+        let older = self
+            .connection
+            .prepare_cached(
+                "SELECT older, newer FROM chathistory_gap WHERE history = ?1 AND older < ?2
+                 ORDER BY older DESC LIMIT 1",
+            )?
+            .query_row(params![history, at.0], row_gap)
+            .optional()?;
+        let newer = self
+            .connection
+            .prepare_cached(
+                "SELECT older, newer FROM chathistory_gap WHERE history = ?1 AND older >= ?2
+                 ORDER BY older LIMIT 1",
+            )?
+            .query_row(params![history, at.0], row_gap)
+            .optional()?;
+        Ok(Stretch { older, newer })
+    }
+
+    fn edges(
+        &self,
+        history: i64,
+        stretch: Stretch,
+    ) -> Result<gap::Edges, Error> {
+        let within = |key: Option<(i64, i64)>| {
+            key.filter(|(time, _)| {
+                stretch.start().is_none_or(|start| *time > start)
+                    && stretch.end().is_none_or(|end| *time <= end)
+            })
+        };
+        let older = match stretch.older {
+            Some(gap) => match within(adjacent(
+                &self.connection,
+                history,
+                (gap.older, i64::MAX),
+                gap::Side::Newer,
+            )?) {
+                Some(first) => self.edge(
+                    history,
+                    stretch,
+                    first,
+                    gap::Side::Older,
+                    Some(gap.older),
+                )?,
+                None => None,
+            },
+            None => None,
+        };
+        let newer = match stretch.newer {
+            Some(gap) => match within(adjacent(
+                &self.connection,
+                history,
+                (gap.older, i64::MAX),
+                gap::Side::Older,
+            )?) {
+                Some(last) => self.edge(
+                    history,
+                    stretch,
+                    last,
+                    gap::Side::Newer,
+                    gap.newer,
+                )?,
+                None => None,
+            },
+            None => None,
+        };
+        Ok(gap::Edges { older, newer })
+    }
+
+    fn edge(
+        &self,
+        history: i64,
+        stretch: Stretch,
+        key: (i64, i64),
+        side: gap::Side,
+        across: Option<i64>,
+    ) -> Result<Option<gap::Edge>, Error> {
+        let stop = match side {
+            gap::Side::Older => stretch.end(),
+            gap::Side::Newer => stretch.start(),
+        };
+        let Some(references) = referenceable(
+            &self.connection,
+            history,
+            key,
+            side.opposite(),
+            stop,
+        )?
+        else {
+            return Ok(None);
+        };
+        let across_references = match across {
+            Some(across) => {
+                let key = match side {
+                    gap::Side::Older => (across, i64::MAX),
+                    gap::Side::Newer => (across, i64::MIN),
+                };
+                referenceable(&self.connection, history, key, side, None)?
+            }
+            None => None,
+        };
+        Ok(Some(gap::Edge {
+            side,
+            history_id: Id::Determined(key.1 as u64),
+            time: timestamp(key.0)?,
+            references,
+            across: across.map(timestamp).transpose()?,
+            across_references,
+        }))
     }
 
     fn select_window(
@@ -756,6 +972,33 @@ impl Database {
         )?.query_row(params![history_key(kind)?, sql_id(id)?], row_message).optional()?)
     }
 
+    pub fn locate(
+        &self,
+        kind: &Kind,
+        id: Option<&message::Id>,
+        time: Timestamp,
+    ) -> Result<Option<(Id, message::Time)>, Error> {
+        let key = history_key(kind)?;
+
+        let by_id = match id {
+            Some(id) => self.connection.prepare_cached(
+                "SELECT m.id, m.time, m.time_from_server, m.msgid, m.content FROM message m
+                 JOIN history h ON h.id = m.history WHERE h.kind = ?1 AND m.msgid = ?2
+                 ORDER BY +m.time DESC, m.id DESC LIMIT 1",
+            )?.query_row(params![key, id.as_ref()], row_message).optional()?,
+            None => None,
+        };
+        let message = match by_id {
+            Some(message) => Some(message),
+            None => self.connection.prepare_cached(
+                "SELECT m.id, m.time, m.time_from_server, m.msgid, m.content FROM message m
+                 JOIN history h ON h.id = m.history WHERE h.kind = ?1 AND m.time = ?2
+                 ORDER BY m.id LIMIT 1",
+            )?.query_row(params![key, time.as_microsecond()], row_message).optional()?,
+        };
+        Ok(message.map(|message| (message.history_id, message.time)))
+    }
+
     pub fn highlight_source(
         &self,
         kind: &Kind,
@@ -803,6 +1046,19 @@ impl Database {
         query: storage::ReferenceQuery,
         reference_types: &[isupport::MessageReferenceType],
     ) -> Result<Option<isupport::MessageReference>, Error> {
+        if matches!(query, storage::ReferenceQuery::Before(_))
+            && self
+                .connection
+                .prepare_cached(
+                    "SELECT 1 FROM chathistory_gap g JOIN history h ON h.id = g.history
+                     WHERE h.kind = ?1 AND g.newer IS NULL",
+                )?
+                .query_row([history_key(kind)?], |_| Ok(()))
+                .optional()?
+                .is_some()
+        {
+            return Ok(None);
+        }
         let msgid = reference_types
             .contains(&isupport::MessageReferenceType::MessageId);
         let timestamp = reference_types
@@ -992,6 +1248,7 @@ impl Write<'_> {
             ));
         }
         incoming.inner.history_id = Id::Undetermined;
+        let live = !incoming.historical;
         let (id, time, replaced_sent) =
             storage::reconcile_message(&mut candidates, incoming);
         let position = candidates
@@ -1011,6 +1268,15 @@ impl Write<'_> {
         }
         let inserted = message.history_id == Id::Undetermined;
         self.store(history, &mut message)?;
+        if inserted && live {
+            // A live message bounds a gap that ran to live.
+            self.transaction
+                .prepare_cached(
+                    "UPDATE chathistory_gap SET newer = ?2
+                     WHERE history = ?1 AND newer IS NULL AND older < ?2",
+                )?
+                .execute(params![history, message.time.utc.as_microsecond()])?;
+        }
         let (maximum, append_only) = self
             .appends
             .get_mut(&history)
@@ -1048,8 +1314,8 @@ impl Write<'_> {
         let key = history_key(kind)?;
         let before = self.transaction.prepare_cached(
             "SELECT m.id, m.time, m.time_from_server, m.msgid, m.content FROM message m
-             JOIN history h ON h.id = m.history WHERE h.kind = ?1 AND m.msgid = ?2 AND m.time < ?3
-             ORDER BY m.time DESC, m.id DESC LIMIT 1",
+             JOIN history h ON h.id = m.history WHERE h.kind = ?1 AND m.msgid = ?2 AND +m.time < ?3
+             ORDER BY +m.time DESC, m.id DESC LIMIT 1",
         )?.query_row(params![key, id.as_ref(), (time.utc + SignedDuration::from_secs(1)).as_microsecond()], row_message).optional()?;
         if before.is_some() {
             return Ok(before);
@@ -1057,7 +1323,7 @@ impl Write<'_> {
         Ok(self.transaction.prepare_cached(
             "SELECT m.id, m.time, m.time_from_server, m.msgid, m.content FROM message m
              JOIN history h ON h.id = m.history WHERE h.kind = ?1 AND m.msgid = ?2
-             ORDER BY m.time DESC, m.id DESC LIMIT 1",
+             ORDER BY +m.time DESC, m.id DESC LIMIT 1",
         )?.query_row(params![key, id.as_ref()], row_message).optional()?)
     }
 
@@ -1323,6 +1589,105 @@ impl Write<'_> {
         Ok(())
     }
 
+    pub fn fill(&mut self, kind: &Kind, fill: &gap::Fill) -> Result<(), Error> {
+        let history = self.history(kind)?;
+        match *fill {
+            gap::Fill::Missing(time) => {
+                let time = time.as_microsecond();
+                let older = adjacent(
+                    &self.transaction,
+                    history,
+                    (time, i64::MIN),
+                    gap::Side::Older,
+                )?
+                .map_or(time, |(older, _)| older);
+                let newer = adjacent(
+                    &self.transaction,
+                    history,
+                    (time, i64::MAX),
+                    gap::Side::Newer,
+                )?
+                .map(|(newer, _)| newer);
+                self.open_gap(history, older, newer)
+            }
+            gap::Fill::Complete { from, to } => self.close_gaps(
+                history,
+                from.map(Timestamp::as_microsecond),
+                to.map(Timestamp::as_microsecond),
+            ),
+        }
+    }
+
+    /// Opens a gap between two times, merging the gaps it overlaps.
+    fn open_gap(
+        &self,
+        history: i64,
+        older: i64,
+        newer: Option<i64>,
+    ) -> Result<(), Error> {
+        let overlapping = self
+            .transaction
+            .prepare_cached(
+                "DELETE FROM chathistory_gap WHERE history = ?1
+                 AND (?3 IS NULL OR older < ?3) AND (newer IS NULL OR newer > ?2)
+                 RETURNING older, newer",
+            )?
+            .query_map(params![history, older, newer], row_gap)?
+            .collect::<Result<Vec<_>, _>>()?;
+        let older = overlapping
+            .iter()
+            .fold(older, |older, gap| older.min(gap.older));
+        let newer = newer.and_then(|newer| {
+            overlapping.iter().try_fold(newer, |newer, gap| {
+                gap.newer.map(|other| newer.max(other))
+            })
+        });
+        self.insert_gap(history, older, newer)
+    }
+
+    /// Removes a range proven complete from the gaps it overlaps.
+    fn close_gaps(
+        &self,
+        history: i64,
+        from: Option<i64>,
+        to: Option<i64>,
+    ) -> Result<(), Error> {
+        let overlapping = self
+            .transaction
+            .prepare_cached(
+                "DELETE FROM chathistory_gap WHERE history = ?1
+                 AND (?3 IS NULL OR older < ?3) AND (?2 IS NULL OR newer IS NULL OR newer > ?2)
+                 RETURNING older, newer",
+            )?
+            .query_map(params![history, from, to], row_gap)?
+            .collect::<Result<Vec<_>, _>>()?;
+        for gap in overlapping {
+            if let Some(from) = from
+                && from > gap.older
+            {
+                self.insert_gap(history, gap.older, Some(from))?;
+            }
+            if let Some(to) = to
+                && gap.newer.is_none_or(|newer| to < newer)
+            {
+                self.insert_gap(history, to, gap.newer)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn insert_gap(
+        &self,
+        history: i64,
+        older: i64,
+        newer: Option<i64>,
+    ) -> Result<(), Error> {
+        self.transaction
+            .prepare_cached("INSERT INTO chathistory_gap VALUES (?1, ?2, ?3)")?
+            .execute(params![history, older, newer])?;
+        Ok(())
+    }
+
     pub fn mark_as_read(&mut self, kind: &Kind) -> Result<Metadata, Error> {
         let mut metadata = self.get_metadata(kind)?;
         metadata.read_marker =
@@ -1342,6 +1707,10 @@ impl Write<'_> {
         self.transaction
             .execute("DELETE FROM message WHERE history = ?1", [history])?;
         self.transaction.execute(
+            "DELETE FROM chathistory_gap WHERE history = ?1",
+            [history],
+        )?;
+        self.transaction.execute(
             "UPDATE history SET read_marker = NULL, latest = NULL, latest_triggers_unread = NULL,
              latest_triggers_highlight = NULL, chathistory_references = NULL WHERE id = ?1", [history],
         )?;
@@ -1357,10 +1726,12 @@ impl Write<'_> {
         let Kind::Channel(server, channel) = kind else {
             return Ok(false);
         };
+
+        // The unary plus on time steers SQLite to the message_msgid index.
         let mut statement = self.transaction.prepare_cached(
             "SELECT m.id, m.time, m.time_from_server, m.msgid, m.content FROM message m
              JOIN history h ON h.id = m.history WHERE h.kind = ?1 AND m.msgid = ?2
-             ORDER BY m.time DESC, m.id DESC",
+             ORDER BY +m.time DESC, m.id DESC",
         )?;
         let mut rows = statement.query(params![
             history_key(&Kind::Highlights)?,
@@ -1541,6 +1912,75 @@ pub(super) fn normalize(
     if let Some(redaction) = &mut message.redaction {
         redaction.from.renormalize(casemapping);
     }
+}
+
+fn row_gap(row: &rusqlite::Row<'_>) -> rusqlite::Result<Gap> {
+    Ok(Gap {
+        older: row.get(0)?,
+        newer: row.get(1)?,
+    })
+}
+
+fn adjacent(
+    connection: &Connection,
+    history: i64,
+    key: (i64, i64),
+    side: gap::Side,
+) -> Result<Option<(i64, i64)>, Error> {
+    let sql = match side {
+        gap::Side::Older => {
+            "SELECT time, id FROM message WHERE history = ?1 AND time <= ?2 AND (time < ?2 OR id < ?3)
+             ORDER BY time DESC, id DESC LIMIT 1"
+        }
+        gap::Side::Newer => {
+            "SELECT time, id FROM message WHERE history = ?1 AND time >= ?2 AND (time > ?2 OR id > ?3)
+             ORDER BY time, id LIMIT 1"
+        }
+    };
+    Ok(connection
+        .prepare_cached(sql)?
+        .query_row(params![history, key.0, key.1], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .optional()?)
+}
+
+/// gets the referenceable message nearest key, stopping at gap
+fn referenceable(
+    connection: &Connection,
+    history: i64,
+    key: (i64, i64),
+    side: gap::Side,
+    stop: Option<i64>,
+) -> Result<Option<message::MessageReferences>, Error> {
+    let (sql, stop) = match side {
+        gap::Side::Older => (
+            "SELECT time, time_from_server, msgid FROM message WHERE history = ?1 AND referenceable = 1
+             AND time <= ?2 AND (time < ?2 OR id <= ?3) AND time > ?4
+             ORDER BY time DESC, id DESC LIMIT 1",
+            stop.unwrap_or(i64::MIN),
+        ),
+        gap::Side::Newer => (
+            "SELECT time, time_from_server, msgid FROM message WHERE history = ?1 AND referenceable = 1
+             AND time >= ?2 AND (time > ?2 OR id >= ?3) AND time <= ?4
+             ORDER BY time, id LIMIT 1",
+            stop.unwrap_or(i64::MAX),
+        ),
+    };
+    Ok(connection
+        .prepare_cached(sql)?
+        .query_row(params![history, key.0, key.1, stop], |row| {
+            let server: bool = row.get(1)?;
+            Ok(message::MessageReferences {
+                timestamp: if server {
+                    Some(timestamp(row.get(0)?)?)
+                } else {
+                    None
+                },
+                id: row.get::<_, Option<String>>(2)?.map(Into::into),
+            })
+        })
+        .optional()?)
 }
 
 fn is_imported(connection: &Connection, kind: &Kind) -> Result<bool, Error> {
@@ -1737,6 +2177,11 @@ fn sql_id(id: u64) -> rusqlite::Result<i64> {
     i64::try_from(id).map_err(|error| {
         rusqlite::Error::ToSqlConversionFailure(Box::new(error))
     })
+}
+
+fn timestamp(time: i64) -> rusqlite::Result<Timestamp> {
+    Timestamp::from_microsecond(time)
+        .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, time))
 }
 
 #[cfg(test)]

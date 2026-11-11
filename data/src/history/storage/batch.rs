@@ -7,7 +7,7 @@ use crate::buffer::BuffersContext;
 use crate::client::ClientsContext;
 use crate::history::filter::{Filter, FilterChain};
 use crate::history::{
-    Id, Kind, Metadata, ReadMarker, database, smart_filter_message,
+    Id, Kind, Metadata, ReadMarker, database, gap, smart_filter_message,
     smart_filter_repeat,
 };
 use crate::message::{self, Source, highlight};
@@ -45,6 +45,7 @@ enum Prepared {
     Preview(Id, url::Url, bool),
     ReadMarker(ReadMarker),
     Sidebar(bool),
+    Fill(gap::Fill),
 }
 
 struct Pending {
@@ -177,6 +178,7 @@ impl Batch {
                         Prepared::ReadMarker(marker)
                     }
                     Update::ShowInSidebar(_, show) => Prepared::Sidebar(show),
+                    Update::Fill(_, fill) => Prepared::Fill(fill),
                     Update::Broadcast(..) => continue,
                 });
             }
@@ -336,6 +338,7 @@ impl Batch {
                     Prepared::Sidebar(show) => {
                         result.show_in_sidebar = Some(*show);
                     }
+                    Prepared::Fill(fill) => write.fill(kind, fill)?,
                 }
             }
             let mut send_marker = None;

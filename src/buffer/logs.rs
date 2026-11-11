@@ -173,7 +173,8 @@ impl Logs {
                     }
                     scroll_view::Event::OpenBuffer(_, _, _) => None,
                     scroll_view::Event::GoToMessage(..) => None,
-                    scroll_view::Event::RequestOlderChathistory => None,
+                    scroll_view::Event::RequestOlderChathistory
+                    | scroll_view::Event::RequestChathistoryGap(..) => None,
                     scroll_view::Event::PreviewChanged => None,
                     scroll_view::Event::HidePreview(..) => None,
                     scroll_view::Event::MarkAsRead => Some(Event::MarkAsRead),

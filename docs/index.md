@@ -63,3 +63,4 @@ We strive to be a leading irc client with a rich IRCv3 feature set. Currently su
 - [`WHOX`](https://ircv3.net/specs/extensions/whox)
 - [`soju.im/bouncer-networks`](https://soju.im/bouncer-networks)
 - [`soju.im/filehost`](https://soju.im/filehost)
+- [`soju.im/search`](https://soju.im/search)

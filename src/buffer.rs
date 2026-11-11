@@ -6,7 +6,7 @@ pub use data::buffer::{Internal, Settings, Upstream};
 use data::config::buffer::text_input::Autocomplete;
 use data::dashboard::BufferAction;
 use data::history::filter::FilterChain;
-use data::history::{self, model, storage};
+use data::history::{self, gap, model, storage};
 use data::target::{self, Target, TargetRef};
 use data::user::Nick;
 use data::{Config, Image, client, file_transfer, input, message, preview};
@@ -88,6 +88,7 @@ pub enum Event {
     SelectedServer(data::Server),
     GoToMessage(buffer::Upstream, message::MessageLink, BufferAction),
     RequestOlderChathistory,
+    RequestChathistoryGap(gap::Edge),
     PreviewChanged,
     HidePreview(history::Kind, history::Id, message::Time, url::Url),
     MarkAsRead(history::Kind),
@@ -422,6 +423,9 @@ impl Buffer {
                     channel::Event::RequestOlderChathistory => {
                         Event::RequestOlderChathistory
                     }
+                    channel::Event::RequestChathistoryGap(edge) => {
+                        Event::RequestChathistoryGap(edge)
+                    }
                     channel::Event::PreviewChanged => Event::PreviewChanged,
                     channel::Event::HidePreview(
                         kind,
@@ -566,6 +570,9 @@ impl Buffer {
                     }
                     query::Event::RequestOlderChathistory => {
                         Event::RequestOlderChathistory
+                    }
+                    query::Event::RequestChathistoryGap(edge) => {
+                        Event::RequestChathistoryGap(edge)
                     }
                     query::Event::PreviewChanged => Event::PreviewChanged,
                     query::Event::HidePreview(kind, history_id, time, url) => {

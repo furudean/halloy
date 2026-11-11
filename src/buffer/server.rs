@@ -457,7 +457,8 @@ impl Server {
                         vec![(target, buffer_action)],
                     )),
                     scroll_view::Event::GoToMessage(..) => None,
-                    scroll_view::Event::RequestOlderChathistory => None,
+                    scroll_view::Event::RequestOlderChathistory
+                    | scroll_view::Event::RequestChathistoryGap(..) => None,
                     scroll_view::Event::PreviewChanged => None,
                     scroll_view::Event::HidePreview(..) => None,
                     scroll_view::Event::MarkAsRead => {

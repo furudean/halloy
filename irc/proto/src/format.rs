@@ -30,7 +30,7 @@ pub fn message(message: Message) -> String {
     output
 }
 
-fn tags(tags: Tags) -> String {
+pub fn tags(tags: Tags) -> String {
     tags.into_iter().map(tag).join(";")
 }
 

@@ -1,7 +1,7 @@
 use database::Extension;
 
 use super::*;
-use crate::history::database;
+use crate::history::{database, gap};
 
 #[derive(Debug, Clone)]
 pub struct Read {
@@ -42,6 +42,7 @@ pub(super) enum MessageCache {
         messages: Vec<message::MessageDisplay>,
         limit: message::Limit,
         clear: Option<Timestamp>,
+        gaps: gap::Edges,
     },
 }
 
@@ -84,6 +85,7 @@ impl ReadCache {
                 clear,
                 has_more_older_messages: false,
                 has_more_newer_messages: false,
+                gaps: gap::Edges::default(),
             };
         }
         self.config.clone_from(config);
@@ -123,6 +125,7 @@ impl ReadCache {
                 clear,
                 has_more_older_messages: false,
                 has_more_newer_messages: false,
+                gaps: gap::Edges::default(),
             };
         }
     }
@@ -189,6 +192,8 @@ impl ReadCache {
             clear,
             has_more_older_messages: older,
             has_more_newer_messages: newer,
+            gaps,
+            ..
         } = &self.message_cache
         else {
             return false;
@@ -196,21 +201,41 @@ impl ReadCache {
         if *clear != requested_clear {
             return false;
         }
+
+        let first = !older
+            && gaps.older.as_ref().is_none_or(|edge| {
+                clear.is_some_and(|clear| {
+                    edge.across.is_some_and(|across| across <= clear)
+                })
+            });
+        let last = !newer
+            && gaps.newer.as_ref().is_none_or(|edge| edge.across.is_none());
+
         match requested {
-            message::Limit::Top(_) => !older,
-            message::Limit::Bottom(_) => !newer || self.tail_pending,
+            message::Limit::Top(_) => first,
+            // appending past a gap starts a new stretch
+            message::Limit::Bottom(_) if self.tail_pending => {
+                gaps.newer.is_none()
+            }
+            message::Limit::Bottom(_) => last,
             message::Limit::Around(_, id) => {
                 messages.iter().any(|m| m.inner.history_id == id)
                     || (matches!(limit, message::Limit::Around(_, loaded) if *loaded == id)
                         && !older
                         && !newer)
             }
-            message::Limit::Backlog(_) => marker.map_or(!older, |marker| {
-                (!older
+            message::Limit::Backlog(_) => marker.map_or(first, |marker| {
+                let reaches = !newer
+                    && gaps.newer.as_ref().is_none_or(|edge| {
+                        edge.across.is_none_or(|across| {
+                            across.as_microsecond() > marker.as_microsecond()
+                        })
+                    });
+                (first
                     || messages
                         .first()
                         .is_some_and(|message| message.inner.time <= marker))
-                    && (!newer
+                    && (reaches
                         || messages
                             .last()
                             .is_some_and(|message| message.inner.time > marker))
@@ -429,6 +454,7 @@ impl ReadCache {
                 messages,
                 has_more_older_messages,
                 has_more_newer_messages,
+                gaps,
                 ..
             } = &mut self.message_cache
             else {
@@ -443,6 +469,7 @@ impl ReadCache {
                 self.invalidate();
                 return false;
             }
+            *gaps = window.gaps;
             let old_len = messages.len();
             messages.extend(
                 window
@@ -500,6 +527,7 @@ impl ReadCache {
                 has_more_newer_messages: window.has_more_newer,
                 limit: read.limit,
                 clear: read.clear,
+                gaps: window.gaps,
             };
             self.tail_pending = read.tail_revision != self.tail_revision;
         }
@@ -640,6 +668,7 @@ impl ReadCache {
             messages,
             has_more_older_messages,
             has_more_newer_messages,
+            gaps,
             ..
         } = &self.message_cache
         else {
@@ -670,6 +699,11 @@ impl ReadCache {
             clear,
             read_marker: *display_read_marker,
             loading,
+            gaps: if self.failed {
+                gap::Edges::default()
+            } else {
+                gaps.clone()
+            },
         }
     }
 }
